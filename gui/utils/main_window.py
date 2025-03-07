@@ -11,7 +11,7 @@ from processors.adv_processor_l5 import ADVProcessorL5
 from processors.cdv_processor_l1 import CDVProcessorL1
 from processors.adv_processor_l1 import ADVProcessorL1
 from gui.line_tabs import LineTab
-from utils.config import Config
+from gui.utils.config import Config  # Corregir esta importación
 
 class MetroAnalyzerApp:
     """Aplicación principal para análisis de datos del Metro"""

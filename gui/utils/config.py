@@ -1,6 +1,7 @@
 # utils/config.py
 import os
 import json
+from datetime import datetime
 
 class Config:
     """Gestionar la configuración de la aplicación"""
@@ -55,7 +56,7 @@ class Config:
         entry = {
             'type': path_type,
             'path': path,
-            'timestamp': import_timestamp()
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Reemplazado import_timestamp()
         }
         
         # Añadir al inicio y limitar a 10 entradas
