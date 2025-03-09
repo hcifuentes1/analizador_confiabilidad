@@ -17,6 +17,8 @@ from sklearn.preprocessing import StandardScaler
 import webbrowser
 import threading
 import logging
+from sklearn.linear_model import LinearRegression
+from statsmodels.tsa.arima.model import ARIMA
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -29,11 +31,29 @@ class DashboardGenerator:
         self.output_folder = output_folder
         self.line = line
         self.analysis_type = analysis_type
+        
+        # Intentar encontrar un puerto disponible si el especificado está en uso
+        import socket
         self.port = port
+        max_port_attempts = 10
+        for attempt in range(max_port_attempts):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.bind(('127.0.0.1', self.port))
+                s.close()
+                break  # Si llegamos aquí, el puerto está disponible
+            except:
+                logger.warning(f"Puerto {self.port} no disponible, intentando con el siguiente puerto...")
+                self.port += 1
+                if attempt == max_port_attempts - 1:
+                    logger.warning(f"No se pudo encontrar un puerto disponible después de {max_port_attempts} intentos")
+        
         self.dataframes = {}
         self.app = None
         self.server_thread = None
         self.running = False
+        self.insights = None  # Para almacenar los insights entre actualizaciones
+        self.reliability_metrics = {}  # Para almacenar métricas de confiabilidad
         
         # Colores para las gráficas
         self.colors = {
@@ -113,6 +133,12 @@ class DashboardGenerator:
                         self.dataframes['movimientos']['Fecha'] = pd.to_datetime(
                             self.dataframes['movimientos']['Fecha'], errors='coerce')
             
+            # Verificar si se cargaron datos
+            if any(not df.empty for df in self.dataframes.values()):
+                # Generar los insights iniciales
+                self.insights = self.generate_insights()
+                logger.info(f"Insights generados para {self.line} - {self.analysis_type}")
+            
             logger.info(f"Datos cargados exitosamente para {self.line} - {self.analysis_type}")
             return True
             
@@ -120,20 +146,163 @@ class DashboardGenerator:
             logger.error(f"Error al cargar los datos: {str(e)}")
             return False
     
-    def generate_insights(self):
+    def generate_insights(self, filtered_dataframes=None):
         """Generar insights y recomendaciones basadas en el análisis de datos"""
+        # Usar dataframes filtrados si se proporcionan
+        dfs = filtered_dataframes if filtered_dataframes else self.dataframes
+        
         insights = {
-            'recomendaciones': [],
+            'recomendaciones_preventivas': [],
+            'recomendaciones_predictivas': [],
+            'alertas_urgentes': [], 
             'patrones_detectados': [],
             'anomalias': [],
-            'resumen': {}
+            'resumen': {},
+            'metricas_confiabilidad': {}
         }
         
         try:
             if self.analysis_type == "CDV":
-                if 'fallos_ocupacion' in self.dataframes and not self.dataframes['fallos_ocupacion'].empty:
-                    # Analizar fallos de ocupación
-                    fo_df = self.dataframes['fallos_ocupacion']
+                # Calcular métricas de confiabilidad para cada equipo
+                if 'fallos_ocupacion' in dfs and not dfs['fallos_ocupacion'].empty:
+                    reliability_fo = self.calculate_equipment_reliability(
+                        dfs['fallos_ocupacion'], 
+                        equipment_col='Equipo', 
+                        failure_date_col='Fecha Hora'
+                    )
+                    
+                    # Guardar en insights
+                    insights['metricas_confiabilidad']['fallos_ocupacion'] = reliability_fo
+                
+                if 'fallos_liberacion' in dfs and not dfs['fallos_liberacion'].empty:
+                    reliability_fl = self.calculate_equipment_reliability(
+                        dfs['fallos_liberacion'], 
+                        equipment_col='Equipo', 
+                        failure_date_col='Fecha Hora'
+                    )
+                    
+                    # Guardar en insights
+                    insights['metricas_confiabilidad']['fallos_liberacion'] = reliability_fl
+                
+                # Combinar y analizar métricas de confiabilidad
+                all_equipment = set()
+                combined_metrics = {}
+                
+                if 'fallos_ocupacion' in insights['metricas_confiabilidad']:
+                    all_equipment.update(insights['metricas_confiabilidad']['fallos_ocupacion'].keys())
+                    combined_metrics.update(insights['metricas_confiabilidad']['fallos_ocupacion'])
+                
+                if 'fallos_liberacion' in insights['metricas_confiabilidad']:
+                    all_equipment.update(insights['metricas_confiabilidad']['fallos_liberacion'].keys())
+                    
+                    # Combinar métricas de liberación con ocupación
+                    for equip, metrics in insights['metricas_confiabilidad']['fallos_liberacion'].items():
+                        if equip in combined_metrics:
+                            combined_metrics[equip]['total_failures'] += metrics['total_failures']
+                            combined_metrics[equip]['recent_failures'] += metrics['recent_failures']
+                            combined_metrics[equip]['is_increasing'] = combined_metrics[equip]['is_increasing'] or metrics['is_increasing']
+                            
+                            # Usar la fecha más reciente de fallo
+                            if metrics['last_failure_date'] > combined_metrics[equip]['last_failure_date']:
+                                combined_metrics[equip]['last_failure_date'] = metrics['last_failure_date']
+                                combined_metrics[equip]['days_since_last_failure'] = metrics['days_since_last_failure']
+                            
+                            # Aumentar urgencia
+                            combined_metrics[equip]['maintenance_urgency'] = min(
+                                1.0, 
+                                combined_metrics[equip]['maintenance_urgency'] + metrics['maintenance_urgency']
+                            )
+                        else:
+                            combined_metrics[equip] = metrics
+                
+                # Generar recomendaciones predictivas
+                high_urgency_equips = []
+                medium_urgency_equips = []
+                low_urgency_equips = []
+                
+                for equip, metrics in combined_metrics.items():
+                    urgency = metrics['maintenance_urgency']
+                    
+                    # Predecir tendencia para equipos de alta frecuencia
+                    if metrics['total_failures'] >= 5:
+                        trend_fo = None
+                        trend_fl = None
+                        
+                        if 'fallos_ocupacion' in dfs and equip in insights['metricas_confiabilidad'].get('fallos_ocupacion', {}):
+                            trend_fo = self.predict_failure_trend(
+                                dfs['fallos_ocupacion'],
+                                equipment_col='Equipo',
+                                date_col='Fecha Hora',
+                                equipment=equip
+                            )
+                        
+                        if 'fallos_liberacion' in dfs and equip in insights['metricas_confiabilidad'].get('fallos_liberacion', {}):
+                            trend_fl = self.predict_failure_trend(
+                                dfs['fallos_liberacion'],
+                                equipment_col='Equipo',
+                                date_col='Fecha Hora',
+                                equipment=equip
+                            )
+                        
+                        # Agregar predicción a las métricas
+                        if trend_fo or trend_fl:
+                            combined_metrics[equip]['prediccion'] = trend_fo if trend_fo else trend_fl
+                    
+                    # Clasificar por urgencia
+                    if urgency > 0.7:
+                        high_urgency_equips.append(equip)
+                    elif urgency > 0.4:
+                        medium_urgency_equips.append(equip)
+                    else:
+                        low_urgency_equips.append(equip)
+                
+                # Generar recomendaciones basadas en urgencia
+                for equip in high_urgency_equips[:5]:
+                    metrics = combined_metrics[equip]
+                    if metrics.get('prediccion'):
+                        expected_failures = round(metrics['prediccion']['expected_failures'], 1)
+                        next_date = datetime.now() + timedelta(days=min(10, metrics['days_since_last_failure']))
+                        insights['alertas_urgentes'].append(
+                            f"ALERTA CRÍTICA: {equip} requiere mantenimiento INMEDIATO. "
+                            f"Previsión: {expected_failures} fallos en los próximos 30 días. "
+                            f"Programar inspección antes del {next_date.strftime('%d-%m-%Y')}"
+                        )
+                    else:
+                        next_date = datetime.now() + timedelta(days=7)
+                        insights['alertas_urgentes'].append(
+                            f"ALERTA CRÍTICA: {equip} requiere mantenimiento INMEDIATO. "
+                            f"Ha tenido {metrics['total_failures']} fallos totales. "
+                            f"Programar inspección antes del {next_date.strftime('%d-%m-%Y')}"
+                        )
+                
+                for equip in medium_urgency_equips[:8]:
+                    metrics = combined_metrics[equip]
+                    next_date = datetime.now() + timedelta(days=15)
+                    insights['recomendaciones_predictivas'].append(
+                        f"PRIORIDAD MEDIA: Programar mantenimiento para {equip} antes del {next_date.strftime('%d-%m-%Y')}. "
+                        f"Último fallo hace {round(metrics['days_since_last_failure'])} días."
+                    )
+                
+                for equip in low_urgency_equips[:5]:
+                    metrics = combined_metrics[equip]
+                    next_date = datetime.now() + timedelta(days=30)
+                    insights['recomendaciones_preventivas'].append(
+                        f"PREVENCIÓN: Incluir {equip} en plan de mantenimiento a 30 días. "
+                        f"Verificar estado durante mantenimiento rutinario."
+                    )
+                
+                # Añadir recomendaciones generales
+                insights['recomendaciones_preventivas'].append(
+                    f"Programar limpieza general de CDVs en estaciones con alta frecuencia de fallos cada 3 meses."
+                )
+                
+                insights['recomendaciones_predictivas'].append(
+                    f"Implementar revisión semanal de los {len(high_urgency_equips)} CDVs con mayor frecuencia de fallos."
+                )
+                
+                # Analizar fallos de ocupación
+                if 'fallos_ocupacion' in dfs and not dfs['fallos_ocupacion'].empty:
+                    fo_df = dfs['fallos_ocupacion']
                     
                     # Agrupar por equipo para encontrar los más problemáticos
                     problematic_equip = fo_df.groupby('Equipo').size().sort_values(ascending=False)
@@ -143,30 +312,24 @@ class DashboardGenerator:
                         top_equipos = problematic_equip.head(5).index.tolist()
                         insights['resumen']['top_equipos_fallos_ocupacion'] = top_equipos
                         
-                        # Recomendaciones basadas en los equipos más problemáticos
-                        for equipo in top_equipos[:3]:  # Top 3 para recomendaciones específicas
-                            insights['recomendaciones'].append(
-                                f"Realizar inspección y mantenimiento prioritario del CDV: {equipo} debido a alta frecuencia de fallos de ocupación."
-                            )
-                    
-                    # Detección de patrones temporales
-                    if 'Fecha Hora' in fo_df.columns:
-                        fo_df['hora'] = fo_df['Fecha Hora'].dt.hour
-                        hour_distribution = fo_df['hora'].value_counts().sort_index()
-                        
-                        # Detectar horas pico de fallos
-                        peak_hours = hour_distribution[hour_distribution > hour_distribution.mean() + hour_distribution.std()].index.tolist()
-                        if peak_hours:
-                            insights['patrones_detectados'].append(
-                                f"Se detectan más fallos de ocupación durante las horas: {', '.join(map(str, peak_hours))}"
-                            )
-                            insights['recomendaciones'].append(
-                                f"Programar inspecciones adicionales durante las horas pico de fallos: {', '.join(map(str, peak_hours))}"
-                            )
+                        # Detección de patrones temporales
+                        if 'Fecha Hora' in fo_df.columns:
+                            fo_df['hora'] = fo_df['Fecha Hora'].dt.hour
+                            hour_distribution = fo_df['hora'].value_counts().sort_index()
+                            
+                            # Detectar horas pico de fallos
+                            peak_hours = hour_distribution[hour_distribution > hour_distribution.mean() + hour_distribution.std()].index.tolist()
+                            if peak_hours:
+                                insights['patrones_detectados'].append(
+                                    f"Se detectan más fallos de ocupación durante las horas: {', '.join(map(str, peak_hours))}"
+                                )
+                                insights['recomendaciones_predictivas'].append(
+                                    f"Programar inspecciones adicionales durante las horas pico de fallos: {', '.join(map(str, peak_hours))}"
+                                )
                 
-                if 'fallos_liberacion' in self.dataframes and not self.dataframes['fallos_liberacion'].empty:
-                    # Analizar fallos de liberación
-                    fl_df = self.dataframes['fallos_liberacion']
+                # Analizar fallos de liberación
+                if 'fallos_liberacion' in dfs and not dfs['fallos_liberacion'].empty:
+                    fl_df = dfs['fallos_liberacion']
                     
                     # Agrupar por equipo para encontrar los más problemáticos
                     problematic_equip_fl = fl_df.groupby('Equipo').size().sort_values(ascending=False)
@@ -175,28 +338,22 @@ class DashboardGenerator:
                         # Top 5 equipos con más fallos de liberación
                         top_equipos_fl = problematic_equip_fl.head(5).index.tolist()
                         insights['resumen']['top_equipos_fallos_liberacion'] = top_equipos_fl
-                        
-                        # Recomendaciones basadas en los equipos más problemáticos
-                        for equipo in top_equipos_fl[:3]:  # Top 3 para recomendaciones específicas
-                            insights['recomendaciones'].append(
-                                f"Programar ajuste de sensibilidad para el CDV: {equipo} debido a fallos recurrentes de liberación."
-                            )
                 
                 # Análisis conjunto para equipos con ambos tipos de fallos
-                if 'fallos_ocupacion' in self.dataframes and 'fallos_liberacion' in self.dataframes:
-                    fo_equipos = set(self.dataframes['fallos_ocupacion']['Equipo'].unique())
-                    fl_equipos = set(self.dataframes['fallos_liberacion']['Equipo'].unique())
+                if 'fallos_ocupacion' in dfs and 'fallos_liberacion' in dfs:
+                    fo_equipos = set(dfs['fallos_ocupacion']['Equipo'].unique())
+                    fl_equipos = set(dfs['fallos_liberacion']['Equipo'].unique())
                     
                     common_equipos = fo_equipos.intersection(fl_equipos)
                     if common_equipos:
                         insights['resumen']['equipos_con_ambos_fallos'] = list(common_equipos)
-                        insights['recomendaciones'].append(
-                            f"Considerar reemplazo preventivo de los CDVs con ambos tipos de fallos: {', '.join(list(common_equipos)[:3])}"
+                        insights['recomendaciones_predictivas'].insert(0,
+                            f"ALTA PRIORIDAD: Considerar reemplazo preventivo de los CDVs con ambos tipos de fallos: {', '.join(list(common_equipos)[:3])}"
                         )
                 
                 # Análisis de tendencias recientes
-                if 'ocupaciones' in self.dataframes and not self.dataframes['ocupaciones'].empty:
-                    ocup_df = self.dataframes['ocupaciones']
+                if 'ocupaciones' in dfs and not dfs['ocupaciones'].empty:
+                    ocup_df = dfs['ocupaciones']
                     
                     # Convertir Count a numérico si es string
                     if 'Count' in ocup_df.columns and ocup_df['Count'].dtype == 'object':
@@ -213,23 +370,72 @@ class DashboardGenerator:
                         )
             
             elif self.analysis_type == "ADV":
-                if 'discordancias' in self.dataframes and not self.dataframes['discordancias'].empty:
-                    # Analizar discordancias
-                    disc_df = self.dataframes['discordancias']
+                # Implementación para ADV (similar a la de CDV pero adaptada)
+                if 'discordancias' in dfs and not dfs['discordancias'].empty:
+                    disc_df = dfs['discordancias']
+                    
+                    # Calcular métricas de confiabilidad
+                    equip_col = 'Equipo Estacion' if 'Equipo Estacion' in disc_df.columns else 'Equipo'
+                    if equip_col in disc_df.columns:
+                        reliability_disc = self.calculate_equipment_reliability(
+                            disc_df, 
+                            equipment_col=equip_col, 
+                            failure_date_col='Fecha Hora'
+                        )
+                        
+                        insights['metricas_confiabilidad']['discordancias'] = reliability_disc
+                        
+                        # Generar recomendaciones basadas en urgencia
+                        high_urgency = []
+                        medium_urgency = []
+                        low_urgency = []
+                        
+                        for equip, metrics in reliability_disc.items():
+                            if metrics['maintenance_urgency'] > 0.7:
+                                high_urgency.append(equip)
+                            elif metrics['maintenance_urgency'] > 0.4:
+                                medium_urgency.append(equip)
+                            else:
+                                low_urgency.append(equip)
+                        
+                        # Agregar recomendaciones
+                        for equip in high_urgency[:3]:
+                            metrics = reliability_disc[equip]
+                            next_date = datetime.now() + timedelta(days=7)
+                            insights['alertas_urgentes'].append(
+                                f"ALERTA CRÍTICA: La aguja {equip} requiere mantenimiento URGENTE. "
+                                f"Ha tenido {metrics['total_failures']} discordancias. "
+                                f"Programar revisión antes del {next_date.strftime('%d-%m-%Y')}"
+                            )
+                        
+                        for equip in medium_urgency[:5]:
+                            metrics = reliability_disc[equip]
+                            next_date = datetime.now() + timedelta(days=15)
+                            insights['recomendaciones_predictivas'].append(
+                                f"PRIORIDAD MEDIA: Programar lubricación para {equip} antes del {next_date.strftime('%d-%m-%Y')}. "
+                                f"Última discordancia hace {round(metrics['days_since_last_failure'])} días."
+                            )
+                        
+                        for equip in low_urgency[:5]:
+                            metrics = reliability_disc[equip]
+                            next_date = datetime.now() + timedelta(days=30)
+                            insights['recomendaciones_preventivas'].append(
+                                f"PREVENCIÓN: Incluir {equip} en plan de lubricación del próximo mes. "
+                                f"Verificar durante mantenimiento rutinario."
+                            )
                     
                     # Contar discordancias por equipo
-                    if 'Equipo Estacion' in disc_df.columns:
-                        disc_count = disc_df['Equipo Estacion'].value_counts().head(5)
+                    if equip_col in disc_df.columns:
+                        disc_count = disc_df[equip_col].value_counts().head(5)
                         top_disc_equipos = disc_count.index.tolist()
                         
                         insights['resumen']['top_equipos_discordancias'] = top_disc_equipos
-                        insights['recomendaciones'].append(
-                            f"Realizar verificación prioritaria de los mecanismos de las agujas: {', '.join(top_disc_equipos[:3])}"
+                        insights['recomendaciones_predictivas'].append(
+                            f"PREDICTIVO: Reprogramar parámetros de control para las agujas con mayor frecuencia de discordancias: {', '.join(top_disc_equipos[:3])}"
                         )
                 
-                if 'movimientos' in self.dataframes and not self.dataframes['movimientos'].empty:
-                    # Analizar movimientos
-                    mov_df = self.dataframes['movimientos']
+                if 'movimientos' in dfs and not dfs['movimientos'].empty:
+                    mov_df = dfs['movimientos']
                     
                     # Convertir Count a numérico si es string
                     if 'Count' in mov_df.columns and mov_df['Count'].dtype == 'object':
@@ -241,37 +447,65 @@ class DashboardGenerator:
                         top_mov_equipos = mov_count.head(5).index.tolist()
                         
                         insights['resumen']['top_equipos_movimientos'] = top_mov_equipos
-                        insights['recomendaciones'].append(
-                            f"Programar lubricación y mantenimiento preventivo para las agujas con mayor uso: {', '.join(top_mov_equipos[:3])}"
-                        )
                         
-                        # Recomendación de mantenimiento predictivo
-                        insights['recomendaciones'].append(
-                            "Implementar plan de lubricación semanal para las agujas con más de 100 movimientos por día"
-                        )
+                        # Generar recomendaciones de mantenimiento preventivo basado en frecuencia de uso
+                        high_usage = []
+                        medium_usage = []
+                        
+                        for equipo, count in mov_count.items():
+                            if count > 100:
+                                high_usage.append(equipo)
+                            elif count > 50:
+                                medium_usage.append(equipo)
+                        
+                        # Recomendaciones basadas en uso
+                        for equip in high_usage[:3]:
+                            insights['recomendaciones_predictivas'].append(
+                                f"PREDICTIVO: Programar lubricación semanal para {equip} debido a su alto uso ({mov_count[equip]} movimientos)."
+                            )
+                        
+                        for equip in medium_usage[:3]:
+                            insights['recomendaciones_preventivas'].append(
+                                f"PREVENCIÓN: Incluir {equip} en plan de lubricación quincenal."
+                            )
+                        
+                        # Cruce con discordancias para identificar equipos críticos
+                        if 'discordancias' in dfs and not dfs['discordancias'].empty:
+                            equip_col = 'Equipo Estacion' if 'Equipo Estacion' in dfs['discordancias'].columns else 'Equipo'
+                            disc_equipos = set(dfs['discordancias'][equip_col].unique())
+                            high_usage_with_disc = set(high_usage).intersection(disc_equipos)
+                            
+                            if high_usage_with_disc:
+                                insights['alertas_urgentes'].append(
+                                    f"CRÍTICO: Las agujas {', '.join(list(high_usage_with_disc)[:3])} tienen alto uso Y discordancias. "
+                                    f"Deben ser revisadas inmediatamente."
+                                )
             
             # Generar recomendaciones generales basadas en el tipo de análisis
             if self.analysis_type == "CDV":
-                insights['recomendaciones'].append(
+                insights['recomendaciones_preventivas'].append(
                     "Establecer un programa de inspección visual mensual para los CDVs con mayor frecuencia de fallos"
                 )
-                insights['recomendaciones'].append(
+                insights['recomendaciones_preventivas'].append(
                     "Implementar un protocolo de limpieza trimestral para los circuitos de vía en estaciones con mayor tráfico"
                 )
             elif self.analysis_type == "ADV":
-                insights['recomendaciones'].append(
+                insights['recomendaciones_preventivas'].append(
                     "Establecer un programa de inspección y lubricación preventiva para agujas con más de 50 movimientos diarios"
                 )
-                insights['recomendaciones'].append(
+                insights['recomendaciones_preventivas'].append(
                     "Verificar mensualmente la calibración de los sistemas de detección en agujas con discordancias recurrentes"
                 )
             
+            # Guardar insights para uso posterior
+            self.insights = insights
             logger.info(f"Insights generados exitosamente para {self.line} - {self.analysis_type}")
             return insights
             
         except Exception as e:
             logger.error(f"Error al generar insights: {str(e)}")
             # Devolver insights básicos en caso de error
+            self.insights = insights
             return insights
     
     def detect_anomalies(self, df, column, contamination=0.05):
@@ -297,6 +531,142 @@ class DashboardGenerator:
         except Exception as e:
             logger.error(f"Error al detectar anomalías: {str(e)}")
             return pd.Series([False] * len(df))
+        
+
+    def calculate_equipment_reliability(self, df, equipment_col, failure_date_col=None, period_days=30):
+        """Calcular métricas de confiabilidad por equipo"""
+        reliability_data = {}
+        
+        try:
+            if df is None or df.empty:
+                return reliability_data
+            
+            # Agrupar por equipo
+            equipment_counts = df[equipment_col].value_counts().reset_index()
+            equipment_counts.columns = ['equipment', 'failures']
+            
+            # Si tenemos fechas, calcular métricas temporales
+            if failure_date_col and failure_date_col in df.columns:
+                now = datetime.now()
+                for equipment in equipment_counts['equipment']:
+                    equip_df = df[df[equipment_col] == equipment]
+                    
+                    # Ordenar por fecha
+                    equip_df = equip_df.sort_values(by=failure_date_col)
+                    
+                    if len(equip_df) > 1:
+                        # Calcular tiempo medio entre fallos (MTBF) en días
+                        equip_df['next_failure'] = equip_df[failure_date_col].shift(-1)
+                        equip_df['time_between_failures'] = (equip_df['next_failure'] - equip_df[failure_date_col]).dt.total_seconds() / (60*60*24)
+                        mtbf = equip_df['time_between_failures'].mean()
+                        
+                        # Predecir próximo fallo basado en MTBF
+                        last_failure = equip_df[failure_date_col].iloc[-1]
+                        next_failure_prediction = last_failure + timedelta(days=mtbf if not pd.isna(mtbf) else 30)
+                        
+                        # Calcular tendencia (¿están aumentando los fallos?)
+                        recent_failures = equip_df[equip_df[failure_date_col] >= (now - timedelta(days=period_days))]
+                        is_increasing = len(recent_failures) > len(equip_df) / (365 / period_days)
+                        
+                        # Calcular días desde último fallo
+                        days_since_last_failure = (now - last_failure).total_seconds() / (60*60*24)
+                        
+                        # Urgencia de mantenimiento
+                        if mtbf:
+                            maintenance_urgency = days_since_last_failure / mtbf
+                        else:
+                            maintenance_urgency = 0.5  # Valor por defecto
+                        
+                        reliability_data[equipment] = {
+                            'mtbf': mtbf if not pd.isna(mtbf) else None,
+                            'total_failures': len(equip_df),
+                            'recent_failures': len(recent_failures),
+                            'last_failure_date': last_failure,
+                            'days_since_last_failure': days_since_last_failure,
+                            'next_failure_prediction': next_failure_prediction,
+                            'is_increasing': is_increasing,
+                            'maintenance_urgency': min(1.0, maintenance_urgency)  # Normalizar a 1.0 max
+                        }
+                    else:
+                        # Solo un fallo, no podemos calcular MTBF
+                        last_failure = equip_df[failure_date_col].iloc[0]
+                        days_since_last_failure = (now - last_failure).total_seconds() / (60*60*24)
+                        
+                        reliability_data[equipment] = {
+                            'mtbf': None,
+                            'total_failures': 1,
+                            'recent_failures': 1 if (now - last_failure).days <= period_days else 0,
+                            'last_failure_date': last_failure,
+                            'days_since_last_failure': days_since_last_failure,
+                            'next_failure_prediction': None,
+                            'is_increasing': False,
+                            'maintenance_urgency': 0.3  # Valor por defecto para un solo fallo
+                        }
+            
+            return reliability_data
+        
+        except Exception as e:
+            logger.error(f"Error calculando métricas de confiabilidad: {str(e)}")
+            return reliability_data    
+        
+
+    def predict_failure_trend(self, df, equipment_col, date_col, equipment, days_forecast=30):
+        """Predecir tendencia de fallos para un equipamiento específico"""
+        try:
+            if df is None or df.empty or equipment_col not in df.columns or date_col not in df.columns:
+                return None
+            
+            equip_df = df[df[equipment_col] == equipment].copy()
+            if len(equip_df) < 5:  # Necesitamos suficientes datos para una predicción
+                return None
+            
+            # Agrupar por día para contar fallos
+            equip_df['date'] = pd.to_datetime(equip_df[date_col]).dt.date
+            daily_failures = equip_df.groupby('date').size().reset_index(name='failures')
+            daily_failures['date'] = pd.to_datetime(daily_failures['date'])
+            
+            # Crear serie temporal completa (incluyendo días sin fallos)
+            date_range = pd.date_range(start=daily_failures['date'].min(), end=daily_failures['date'].max())
+            ts = pd.DataFrame({'date': date_range})
+            ts = ts.merge(daily_failures, on='date', how='left')
+            ts['failures'] = ts['failures'].fillna(0)
+            
+            # Intentar ajustar un modelo ARIMA simple
+            try:
+                # Preparar datos para ARIMA
+                ts_data = ts['failures'].values
+                model = ARIMA(ts_data, order=(1,0,1))
+                model_fit = model.fit()
+                
+                # Predecir
+                forecast = model_fit.forecast(steps=days_forecast)
+                return {
+                    'forecasted_values': forecast.tolist(),
+                    'forecasted_dates': [(ts['date'].max() + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days_forecast)],
+                    'expected_failures': sum(forecast)
+                }
+            except:
+                # Si falla ARIMA, usar regresión lineal simple
+                X = np.array(range(len(ts))).reshape(-1, 1)
+                y = ts['failures'].values
+                model = LinearRegression()
+                model.fit(X, y)
+                
+                # Predecir
+                X_future = np.array(range(len(ts), len(ts) + days_forecast)).reshape(-1, 1)
+                forecast = model.predict(X_future)
+                forecast = np.maximum(forecast, 0)  # No permitir valores negativos
+                
+                return {
+                    'forecasted_values': forecast.tolist(),
+                    'forecasted_dates': [(ts['date'].max() + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days_forecast)],
+                    'expected_failures': sum(forecast)
+                }
+        
+        except Exception as e:
+            logger.error(f"Error en predicción de tendencia: {str(e)}")
+            return None
+
     
     def create_dashboard(self):
         """Crear y configurar el dashboard web"""
@@ -305,8 +675,9 @@ class DashboardGenerator:
             return False
         
         try:
-            # Generar insights
-            insights = self.generate_insights()
+            # Generar insights iniciales si no existen
+            if not self.insights:
+                self.insights = self.generate_insights()
             
             # Crear aplicación Dash
             self.app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -439,25 +810,66 @@ class DashboardGenerator:
                         ])
                     ]),
                     
+                    # Fila de alertas urgentes (nueva)
+                    html.Div(id='alertas-container', className='row mb-4', children=[
+                        html.Div(className='col-md-12', children=[
+                            html.Div(className='card', style={'backgroundColor': self.colors['card_background']}, children=[
+                                html.Div(className='card-header bg-danger text-white', children=[
+                                    html.H5("Alertas Urgentes de Mantenimiento", className='card-title')
+                                ]),
+                                html.Div(className='card-body', children=[
+                                    html.Ul(id='alertas-list', children=[
+                                        html.Li(alerta, className='alert alert-danger') 
+                                        for alerta in self.insights.get('alertas_urgentes', [])
+                                    ]) if self.insights.get('alertas_urgentes', []) else 
+                                    html.P("No hay alertas urgentes en este momento", className='text-success')
+                                ])
+                            ])
+                        ])
+                    ]),
+                    
                     # Fila de recomendaciones y análisis
                     html.Div(className='row mb-4', children=[
                         html.Div(className='col-md-6', children=[
                             html.Div(className='card', style={'backgroundColor': self.colors['card_background']}, children=[
-                                html.Div(className='card-header bg-info text-white', children=[
-                                    html.H5("Recomendaciones de Mantenimiento", className='card-title')
+                                html.Div(className='card-header bg-primary text-white', children=[
+                                    html.H5("Mantenimiento Predictivo", className='card-title')
                                 ]),
-                                html.Div(className='card-body', children=[
-                                    html.Ul([html.Li(rec) for rec in insights['recomendaciones']])
+                                html.Div(className='card-body', id='maintenance-predictive-body', children=[
+                                    html.Ul(id='recomendaciones-predictivas-list', children=[
+                                        html.Li(rec, className='mb-2') 
+                                        for rec in self.insights.get('recomendaciones_predictivas', [])
+                                    ])
                                 ])
                             ])
                         ]),
                         html.Div(className='col-md-6', children=[
                             html.Div(className='card', style={'backgroundColor': self.colors['card_background']}, children=[
+                                html.Div(className='card-header bg-success text-white', children=[
+                                    html.H5("Mantenimiento Preventivo", className='card-title')
+                                ]),
+                                html.Div(className='card-body', id='maintenance-preventive-body', children=[
+                                    html.Ul(id='recomendaciones-preventivas-list', children=[
+                                        html.Li(rec, className='mb-2') 
+                                        for rec in self.insights.get('recomendaciones_preventivas', [])
+                                    ])
+                                ])
+                            ])
+                        ])
+                    ]),
+                    
+                    # Fila de patrones detectados
+                    html.Div(className='row mb-4', children=[
+                        html.Div(className='col-md-12', children=[
+                            html.Div(className='card', style={'backgroundColor': self.colors['card_background']}, children=[
                                 html.Div(className='card-header bg-warning', children=[
                                     html.H5("Patrones Detectados", className='card-title')
                                 ]),
-                                html.Div(className='card-body', children=[
-                                    html.Ul([html.Li(pat) for pat in insights['patrones_detectados']]) if insights['patrones_detectados'] else html.P("No se detectaron patrones significativos")
+                                html.Div(className='card-body', id='patrones-body', children=[
+                                    html.Ul(id='patrones-list', children=[
+                                        html.Li(pat) for pat in self.insights.get('patrones_detectados', [])
+                                    ]) if self.insights.get('patrones_detectados', []) else 
+                                    html.P("No se detectaron patrones significativos")
                                 ])
                             ])
                         ])
@@ -525,18 +937,53 @@ class DashboardGenerator:
                     ])
                 )
                 
-                # Total de equipos afectados
-                equipos_fo = set(self.dataframes.get('fallos_ocupacion', pd.DataFrame()).get('Equipo', pd.Series()).unique())
-                equipos_fl = set(self.dataframes.get('fallos_liberacion', pd.DataFrame()).get('Equipo', pd.Series()).unique())
-                total_equipos = len(equipos_fo.union(equipos_fl))
+                # Equipos que requieren atención urgente
+                num_urgentes = 0
+                if hasattr(self, 'insights') and self.insights and 'alertas_urgentes' in self.insights:
+                    num_urgentes = len(self.insights['alertas_urgentes'])
                 
                 kpi_cards.append(
                     html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-primary mb-3', children=[
-                            html.Div(className='card-header', children=["Equipos Afectados"]),
+                        html.Div(className='card text-white bg-danger mb-3', children=[
+                            html.Div(className='card-header', children=["Equipos Críticos"]),
                             html.Div(className='card-body', children=[
-                                html.H5(f"{total_equipos}", className='card-title'),
-                                html.P("CDVs con fallos detectados", className='card-text')
+                                html.H5(f"{num_urgentes}", className='card-title'),
+                                html.P("Equipos que requieren atención inmediata", className='card-text')
+                            ])
+                        ])
+                    ])
+                )
+                
+                # Índice MTBF (Mean Time Between Failures) promedio
+                mtbf_value = "N/A"
+                if total_fo > 0 and 'fallos_ocupacion' in self.dataframes and 'Fecha Hora' in self.dataframes['fallos_ocupacion'].columns:
+                    # Calcular MTBF solo si tenemos datos de fechas
+                    fo_df = self.dataframes['fallos_ocupacion'].copy()
+                    fo_df['Fecha Hora'] = pd.to_datetime(fo_df['Fecha Hora'])
+                    
+                    # Agrupar por equipo
+                    mtbf_by_equip = {}
+                    for equip in fo_df['Equipo'].unique():
+                        eq_df = fo_df[fo_df['Equipo'] == equip].sort_values('Fecha Hora')
+                        if len(eq_df) > 1:
+                            # Calcular diferencias entre fechas consecutivas
+                            eq_df['next_failure'] = eq_df['Fecha Hora'].shift(-1)
+                            eq_df['time_diff'] = (eq_df['next_failure'] - eq_df['Fecha Hora']).dt.total_seconds() / (3600 * 24)  # en días
+                            avg_mtbf = eq_df['time_diff'].mean()
+                            if not pd.isna(avg_mtbf):
+                                mtbf_by_equip[equip] = avg_mtbf
+                    
+                    if mtbf_by_equip:
+                        mtbf_value = f"{np.mean(list(mtbf_by_equip.values())):.1f} días"
+                
+                # Tarjeta con MTBF  
+                kpi_cards.append(
+                    html.Div(className='col-md-3', children=[
+                        html.Div(className='card text-white bg-info mb-3', children=[
+                            html.Div(className='card-header', children=["Tiempo Medio Entre Fallos"]),
+                            html.Div(className='card-body', children=[
+                                html.H5(f"{mtbf_value}", className='card-title'),
+                                html.P("MTBF promedio del sistema", className='card-text')
                             ])
                         ])
                     ])
@@ -558,10 +1005,11 @@ class DashboardGenerator:
                 else:
                     fiabilidad = "N/A"
                 
+                # Confiabilidad del sistema
                 kpi_cards.append(
                     html.Div(className='col-md-3', children=[
                         html.Div(className='card text-white bg-success mb-3', children=[
-                            html.Div(className='card-header', children=["Índice de Fiabilidad"]),
+                            html.Div(className='card-header', children=["Índice de Confiabilidad"]),
                             html.Div(className='card-body', children=[
                                 html.H5(f"{fiabilidad if isinstance(fiabilidad, str) else f'{fiabilidad:.2f}%'}", className='card-title'),
                                 html.P("Porcentaje de operaciones sin fallos", className='card-text')
@@ -569,6 +1017,33 @@ class DashboardGenerator:
                         ])
                     ])
                 )
+                
+                # Agregar tarjeta con resumen del estado del sistema
+                if isinstance(fiabilidad, float):
+                    if fiabilidad >= 95:
+                        system_status = "ÓPTIMO"
+                        status_class = "bg-success"
+                    elif fiabilidad >= 85:
+                        system_status = "ACEPTABLE"
+                        status_class = "bg-info"
+                    elif fiabilidad >= 70:
+                        system_status = "REQUIERE ATENCIÓN"
+                        status_class = "bg-warning"
+                    else:
+                        system_status = "CRÍTICO"
+                        status_class = "bg-danger"
+                    
+                    kpi_cards.append(
+                        html.Div(className='col-md-3', children=[
+                            html.Div(className=f'card text-white {status_class} mb-3', children=[
+                                html.Div(className='card-header', children=["Estado del Sistema"]),
+                                html.Div(className='card-body', children=[
+                                    html.H5(f"{system_status}", className='card-title'),
+                                    html.P("Evaluación general del sistema", className='card-text')
+                                ])
+                            ])
+                        ])
+                    )
                 
             elif self.analysis_type == "ADV":
                 # KPIs para ADV
@@ -637,10 +1112,44 @@ class DashboardGenerator:
                 kpi_cards.append(
                     html.Div(className='col-md-3', children=[
                         html.Div(className='card text-white bg-success mb-3', children=[
-                            html.Div(className='card-header', children=["Índice de Fiabilidad"]),
+                            html.Div(className='card-header', children=["Índice de Confiabilidad"]),
                             html.Div(className='card-body', children=[
                                 html.H5(f"{fiabilidad if isinstance(fiabilidad, str) else f'{fiabilidad:.2f}%'}", className='card-title'),
                                 html.P("Porcentaje de movimientos sin discordancias", className='card-text')
+                            ])
+                        ])
+                    ])
+                )
+                
+                # Agujas que requieren atención urgente
+                num_urgentes = 0
+                if hasattr(self, 'insights') and self.insights and 'alertas_urgentes' in self.insights:
+                    num_urgentes = len(self.insights['alertas_urgentes'])
+                
+                kpi_cards.append(
+                    html.Div(className='col-md-3', children=[
+                        html.Div(className='card text-white bg-danger mb-3', children=[
+                            html.Div(className='card-header', children=["Agujas Críticas"]),
+                            html.Div(className='card-body', children=[
+                                html.H5(f"{num_urgentes}", className='card-title'),
+                                html.P("Agujas que requieren atención inmediata", className='card-text')
+                            ])
+                        ])
+                    ])
+                )
+                
+                # Agregar tarjeta con mantenimientos preventivos recomendados
+                num_preventivos = 0
+                if hasattr(self, 'insights') and self.insights and 'recomendaciones_preventivas' in self.insights:
+                    num_preventivos = len(self.insights['recomendaciones_preventivas'])
+                
+                kpi_cards.append(
+                    html.Div(className='col-md-3', children=[
+                        html.Div(className='card text-white bg-primary mb-3', children=[
+                            html.Div(className='card-header', children=["Mantenimientos Preventivos"]),
+                            html.Div(className='card-body', children=[
+                                html.H5(f"{num_preventivos}", className='card-title'),
+                                html.P("Mantenimientos preventivos recomendados", className='card-text')
                             ])
                         ])
                     ])
@@ -1187,16 +1696,26 @@ class DashboardGenerator:
         if not self.app:
             return
         
-        # Primero definir la función del callback
-        def update_graphs(n_clicks, start_date, end_date, selected_equipments, viz_type):
+        # Definir la función del callback
+        def update_graphs_and_recommendations(n_clicks, start_date, end_date, selected_equipments, viz_type):
             # No actualizar si no se ha presionado el botón
             if n_clicks is None:
-                # Retornar figuras iniciales
+                # Retornar valores iniciales
                 return [
-                    self.create_time_trend_figure(),
+                    self.create_time_trend_figure(), 
                     self.create_equipment_distribution_figure(),
                     self.create_hourly_distribution_figure(),
-                    self.create_heatmap_figure()
+                    self.create_heatmap_figure(),
+                    # Lista de elementos para las alertas
+                    [html.Li(alerta, className='alert alert-danger') for alerta in self.insights.get('alertas_urgentes', [])] 
+                    if self.insights.get('alertas_urgentes', []) else [html.P("No hay alertas urgentes en este momento", className='text-success')],
+                    # Lista para recomendaciones predictivas
+                    [html.Li(rec, className='mb-2') for rec in self.insights.get('recomendaciones_predictivas', [])],
+                    # Lista para recomendaciones preventivas
+                    [html.Li(rec, className='mb-2') for rec in self.insights.get('recomendaciones_preventivas', [])],
+                    # Lista para patrones detectados
+                    [html.Li(pat) for pat in self.insights.get('patrones_detectados', [])]
+                    if self.insights.get('patrones_detectados', []) else [html.P("No se detectaron patrones significativos")]
                 ]
                 
             try:
@@ -1207,116 +1726,84 @@ class DashboardGenerator:
                 # Crear copias filtradas de los dataframes originales
                 filtered_dfs = {}
                 
-                # Filtrar datos para CDV
-                if self.analysis_type == "CDV":
-                    # Aplicar filtros de fecha a todos los dataframes
-                    for key, df in self.dataframes.items():
-                        if df is not None and not df.empty:
-                            filtered_dfs[key] = df.copy()
-                            
-                            # Filtrar por fecha si la columna adecuada existe
-                            if 'Fecha Hora' in df.columns and start_date and end_date:
-                                # Asegurar que Fecha Hora es datetime
-                                filtered_dfs[key]['Fecha Hora'] = pd.to_datetime(filtered_dfs[key]['Fecha Hora'])
-                                filtered_dfs[key] = filtered_dfs[key][
-                                    (filtered_dfs[key]['Fecha Hora'] >= start_date) & 
-                                    (filtered_dfs[key]['Fecha Hora'] <= end_date)
-                                ]
-                            elif 'Fecha' in df.columns and start_date and end_date:
-                                # Asegurar que Fecha es datetime
-                                filtered_dfs[key]['Fecha'] = pd.to_datetime(filtered_dfs[key]['Fecha'])
-                                filtered_dfs[key] = filtered_dfs[key][
-                                    (filtered_dfs[key]['Fecha'] >= pd.to_datetime(start_date)) & 
-                                    (filtered_dfs[key]['Fecha'] <= pd.to_datetime(end_date))
-                                ]
-                            
-                            # Filtrar por equipamiento si es necesario
-                            if selected_equipments and len(selected_equipments) > 0 and 'Equipo' in df.columns:
+                # Aplicar filtros a todos los dataframes
+                for key, df in self.dataframes.items():
+                    if df is not None and not df.empty:
+                        filtered_dfs[key] = df.copy()
+                        
+                        # Filtrar por fecha si la columna adecuada existe
+                        if 'Fecha Hora' in df.columns and start_date and end_date:
+                            # Asegurar que Fecha Hora es datetime
+                            filtered_dfs[key]['Fecha Hora'] = pd.to_datetime(filtered_dfs[key]['Fecha Hora'])
+                            filtered_dfs[key] = filtered_dfs[key][
+                                (filtered_dfs[key]['Fecha Hora'] >= start_date) & 
+                                (filtered_dfs[key]['Fecha Hora'] <= end_date)
+                            ]
+                        elif 'Fecha' in df.columns and start_date and end_date:
+                            # Asegurar que Fecha es datetime
+                            filtered_dfs[key]['Fecha'] = pd.to_datetime(filtered_dfs[key]['Fecha'])
+                            filtered_dfs[key] = filtered_dfs[key][
+                                (filtered_dfs[key]['Fecha'] >= pd.to_datetime(start_date)) & 
+                                (filtered_dfs[key]['Fecha'] <= pd.to_datetime(end_date))
+                            ]
+                        
+                        # Filtrar por equipamiento según el tipo de análisis
+                        if selected_equipments and len(selected_equipments) > 0:
+                            if 'Equipo' in df.columns:
                                 filtered_dfs[key] = filtered_dfs[key][
                                     filtered_dfs[key]['Equipo'].isin(selected_equipments)
                                 ]
-                    
-                    # Generar gráficos con los datos filtrados
-                    if not filtered_dfs:
-                        # Si no hay datos filtrados, usar los originales
-                        time_trend = self.create_time_trend_figure()
-                        equip_dist = self.create_equipment_distribution_figure()
-                        hourly_dist = self.create_hourly_distribution_figure()
-                        heatmap = self.create_heatmap_figure()
-                    else:
-                        # Usar versiones temporales de las funciones de creación de gráficos
-                        # que aceptan los dataframes filtrados
-                        time_trend = self.create_time_trend_figure(dataframes=filtered_dfs)
-                        equip_dist = self.create_equipment_distribution_figure(dataframes=filtered_dfs)
-                        hourly_dist = self.create_hourly_distribution_figure(dataframes=filtered_dfs)
-                        heatmap = self.create_heatmap_figure(dataframes=filtered_dfs, viz_type=viz_type)
-                    
-                    return time_trend, equip_dist, hourly_dist, heatmap
-                
-                # Filtrar datos para ADV
-                elif self.analysis_type == "ADV":
-                    # Similar implementación para ADV
-                    for key, df in self.dataframes.items():
-                        if df is not None and not df.empty:
-                            filtered_dfs[key] = df.copy()
-                            
-                            # Filtrar por fecha
-                            if 'Fecha Hora' in df.columns and start_date and end_date:
-                                # Asegurar que Fecha Hora es datetime
-                                filtered_dfs[key]['Fecha Hora'] = pd.to_datetime(filtered_dfs[key]['Fecha Hora'])
+                            elif 'Equipo Estacion' in df.columns and self.analysis_type == "ADV":
                                 filtered_dfs[key] = filtered_dfs[key][
-                                    (filtered_dfs[key]['Fecha Hora'] >= start_date) & 
-                                    (filtered_dfs[key]['Fecha Hora'] <= end_date)
+                                    filtered_dfs[key]['Equipo Estacion'].isin(selected_equipments)
                                 ]
-                            elif 'Fecha' in df.columns and start_date and end_date:
-                                # Asegurar que Fecha es datetime
-                                filtered_dfs[key]['Fecha'] = pd.to_datetime(filtered_dfs[key]['Fecha'])
-                                filtered_dfs[key] = filtered_dfs[key][
-                                    (filtered_dfs[key]['Fecha'] >= pd.to_datetime(start_date)) & 
-                                    (filtered_dfs[key]['Fecha'] <= pd.to_datetime(end_date))
-                                ]
-                            
-                            # Filtrar por equipamiento
-                            if selected_equipments and len(selected_equipments) > 0:
-                                if 'Equipo' in df.columns:
-                                    filtered_dfs[key] = filtered_dfs[key][
-                                        filtered_dfs[key]['Equipo'].isin(selected_equipments)
-                                    ]
-                                elif 'Equipo Estacion' in df.columns:
-                                    filtered_dfs[key] = filtered_dfs[key][
-                                        filtered_dfs[key]['Equipo Estacion'].isin(selected_equipments)
-                                    ]
-                    
-                    # Generar gráficos con los datos filtrados
-                    if not filtered_dfs:
-                        # Si no hay datos filtrados, usar los originales
-                        time_trend = self.create_time_trend_figure()
-                        equip_dist = self.create_equipment_distribution_figure()
-                        hourly_dist = self.create_hourly_distribution_figure()
-                        heatmap = self.create_heatmap_figure()
-                    else:
-                        # Usar versiones de las funciones que aceptan los dataframes filtrados
-                        time_trend = self.create_time_trend_figure(dataframes=filtered_dfs)
-                        equip_dist = self.create_equipment_distribution_figure(dataframes=filtered_dfs)
-                        hourly_dist = self.create_hourly_distribution_figure(dataframes=filtered_dfs)
-                        heatmap = self.create_heatmap_figure(dataframes=filtered_dfs, viz_type=viz_type)
-                    
-                    return time_trend, equip_dist, hourly_dist, heatmap
                 
-                # Valores por defecto
-                return (
-                    self.create_time_trend_figure(), 
-                    self.create_equipment_distribution_figure(),
-                    self.create_hourly_distribution_figure(),
-                    self.create_heatmap_figure()
-                )
+                # Verificar si hay datos después del filtrado
+                has_data = any(not df.empty for df in filtered_dfs.values())
+                
+                if has_data:
+                    # Generar insights actualizados basados en datos filtrados
+                    updated_insights = self.generate_insights(filtered_dfs)
+                    
+                    # Retornar todos los componentes actualizados
+                    return [
+                        self.create_time_trend_figure(dataframes=filtered_dfs),
+                        self.create_equipment_distribution_figure(dataframes=filtered_dfs),
+                        self.create_hourly_distribution_figure(dataframes=filtered_dfs, viz_type=viz_type),
+                        self.create_heatmap_figure(dataframes=filtered_dfs, viz_type=viz_type),
+                        [html.Li(alerta, className='alert alert-danger') for alerta in updated_insights.get('alertas_urgentes', [])]
+                        if updated_insights.get('alertas_urgentes', []) else [html.P("No hay alertas urgentes en este momento", className='text-success')],
+                        [html.Li(rec, className='mb-2') for rec in updated_insights.get('recomendaciones_predictivas', [])],
+                        [html.Li(rec, className='mb-2') for rec in updated_insights.get('recomendaciones_preventivas', [])],
+                        [html.Li(pat) for pat in updated_insights.get('patrones_detectados', [])]
+                        if updated_insights.get('patrones_detectados', []) else [html.P("No se detectaron patrones significativos en los datos filtrados")]
+                    ]
+                
+                else:
+                    # Mensaje para indicar que no hay datos para el filtro seleccionado
+                    empty_fig = go.Figure()
+                    empty_fig.update_layout(
+                        title="No hay datos disponibles para los filtros seleccionados",
+                        xaxis=dict(title=""),
+                        yaxis=dict(title=""),
+                        annotations=[dict(
+                            text="Intente con un rango de fechas o equipos diferente",
+                            xref="paper", yref="paper",
+                            x=0.5, y=0.5, showarrow=False
+                        )]
+                    )
+                    
+                    # Mensaje para las recomendaciones y alertas
+                    no_data_msg = [html.P("No hay datos para los filtros seleccionados", className='text-warning')]
+                    
+                    return empty_fig, empty_fig, empty_fig, empty_fig, no_data_msg, no_data_msg, no_data_msg, no_data_msg
                     
             except Exception as e:
-                logger.error(f"Error en callback de actualización de gráficos: {str(e)}")
-                # Devolver gráficos vacíos en caso de error
+                logger.error(f"Error en callback de actualización: {str(e)}")
+                # Devolver componentes con mensaje de error
                 empty_fig = go.Figure()
                 empty_fig.update_layout(
-                    title="Error al actualizar gráficos",
+                    title="Error al actualizar datos",
                     xaxis=dict(title=""),
                     yaxis=dict(title=""),
                     annotations=[dict(
@@ -1325,20 +1812,27 @@ class DashboardGenerator:
                         x=0.5, y=0.5, showarrow=False
                     )]
                 )
-                return empty_fig, empty_fig, empty_fig, empty_fig
+                
+                error_msg = [html.P(f"Error al procesar los datos: {str(e)}", className='text-danger')]
+                
+                return empty_fig, empty_fig, empty_fig, empty_fig, error_msg, error_msg, error_msg, error_msg
         
-        # Luego aplicar el decorador a la función
+        # Aplicar el decorador al callback AL FINAL
         self.app.callback(
             [Output('time-trend-graph', 'figure'),
             Output('equipment-distribution', 'figure'),
             Output('hourly-distribution', 'figure'),
-            Output('heatmap', 'figure')],
-            [Input('apply-filters-button', 'n_clicks')],  # Usar el botón como trigger
-            [State('date-range', 'start_date'),  # Los demás parámetros como State
+            Output('heatmap', 'figure'),
+            Output('alertas-list', 'children'),
+            Output('recomendaciones-predictivas-list', 'children'),
+            Output('recomendaciones-preventivas-list', 'children'),
+            Output('patrones-list', 'children')],
+            [Input('apply-filters-button', 'n_clicks')],
+            [State('date-range', 'start_date'),
             State('date-range', 'end_date'),
             State('equipment-filter', 'value'),
             State('visualization-type', 'value')]
-        )(update_graphs)  # Aplicar el decorador a la función ya definida
+        )(update_graphs_and_recommendations)
     
     def run_dashboard(self):
         """Ejecutar el dashboard web"""
@@ -1352,12 +1846,27 @@ class DashboardGenerator:
             self.server_thread.daemon = True
             self.server_thread.start()
             
-            # Abrir navegador
+            # Darle un tiempo al servidor para iniciar antes de abrir el navegador
+            import time
+            time.sleep(2)  # Esperar 2 segundos
+            
+            # Abrir navegador en una nueva pestaña
             url = f"http://localhost:{self.port}"
-            webbrowser.open(url)
+            try:
+                # Intentar abrir en un navegador existente
+                webbrowser.open_new_tab(url)
+                logger.info(f"Abriendo dashboard en navegador: {url}")
+            except:
+                # Si falla, intentar abrir en un nuevo navegador
+                try:
+                    webbrowser.open(url)
+                    logger.info(f"Abriendo dashboard en navegador: {url}")
+                except Exception as e:
+                    logger.error(f"No se pudo abrir el navegador automáticamente: {str(e)}")
+                    logger.info(f"Por favor, abra manualmente la URL en su navegador: {url}")
             
             self.running = True
-            logger.info(f"Dashboard iniciado en {url}")
+            logger.info(f"Dashboard de mantenimiento predictivo iniciado en {url}")
             
             return True
         
@@ -1368,9 +1877,27 @@ class DashboardGenerator:
     def _run_server(self):
         """Método interno para ejecutar el servidor Dash"""
         try:
-            self.app.run_server(debug=False, port=self.port, use_reloader=False)
+            logger.info(f"Iniciando servidor Dash en puerto {self.port}...")
+            # Configurar modo de debug y otras opciones
+            self.app.run_server(
+                debug=False,
+                port=self.port,
+                host='0.0.0.0',  # Permitir conexiones desde cualquier IP
+                use_reloader=False,
+                dev_tools_ui=False,
+                dev_tools_props_check=False
+            )
         except Exception as e:
             logger.error(f"Error en el servidor Dash: {str(e)}")
+            # Intentar cerrar el puerto si está en uso
+            import socket
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.bind(('0.0.0.0', self.port))
+                s.close()
+                logger.info(f"Puerto {self.port} liberado correctamente")
+            except:
+                logger.error(f"No se pudo liberar el puerto {self.port}. Puede estar en uso por otra aplicación.")
     
     def stop_dashboard(self):
         """Detener el dashboard web"""
