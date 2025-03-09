@@ -2,6 +2,8 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import os
+from datetime import datetime
+from dashboard.dashboard_integration import DashboardIntegration
 
 class LineTab:
     """Clase para gestionar las pestañas de cada línea"""
@@ -20,8 +22,17 @@ class LineTab:
         self.analysis_type_var = tk.StringVar(value="CDV")
         
         # Variables para seguimiento de progreso
-        self.progress_var = tk.DoubleVar()
-        self.status_var = tk.StringVar(value="Listo para procesar")
+        self.progress_var_cdv = tk.DoubleVar()
+        self.progress_var_adv = tk.DoubleVar()
+        self.status_var_cdv = tk.StringVar(value="Listo para procesar CDV")
+        self.status_var_adv = tk.StringVar(value="Listo para procesar ADV")
+        
+        # Estado de procesamiento
+        self.cdv_processing_complete = False
+        self.adv_processing_complete = False
+        
+        # Integración del dashboard
+        self.dashboard_integration = None
         
         # Crear el frame principal para la pestaña
         self.frame = ttk.Frame(notebook)
@@ -79,17 +90,33 @@ class LineTab:
                  text="Valor entre 0 y 1. Menor valor = más sensible en detección de fallos de liberación").grid(
             row=1, column=2, sticky=tk.W, padx=10)
         
-        # Sección de control
-        control_frame = ttk.Frame(main_frame)
-        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        # Sección de progreso y estado
+        self.progress_frame = ttk.LabelFrame(main_frame, text="Progreso del Procesamiento", padding="10")
+        self.progress_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Barra de progreso
-        self.progress_bar = ttk.Progressbar(control_frame, variable=self.progress_var, length=600, mode="determinate")
-        self.progress_bar.pack(fill=tk.X, pady=10)
+        # Progreso y estado para CDV
+        ttk.Label(self.progress_frame, text="CDV:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.progress_bar_cdv = ttk.Progressbar(self.progress_frame, variable=self.progress_var_cdv, length=550, mode="determinate")
+        self.progress_bar_cdv.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
         
-        # Etiqueta de estado
-        status_label = ttk.Label(control_frame, textvariable=self.status_var, wraplength=900)
-        status_label.pack(fill=tk.X, pady=5)
+        # Botón para visualizar resultados CDV (inicialmente deshabilitado)
+        self.view_cdv_button = ttk.Button(self.progress_frame, text="Visualizar Resultados CDV", command=lambda: self.view_results("CDV"), state=tk.DISABLED)
+        self.view_cdv_button.grid(row=0, column=2, padx=5, pady=5)
+        
+        status_label_cdv = ttk.Label(self.progress_frame, textvariable=self.status_var_cdv, wraplength=600)
+        status_label_cdv.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+        
+        # Progreso y estado para ADV
+        ttk.Label(self.progress_frame, text="ADV:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.progress_bar_adv = ttk.Progressbar(self.progress_frame, variable=self.progress_var_adv, length=550, mode="determinate")
+        self.progress_bar_adv.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+        
+        # Botón para visualizar resultados ADV (inicialmente deshabilitado)
+        self.view_adv_button = ttk.Button(self.progress_frame, text="Visualizar Resultados ADV", command=lambda: self.view_results("ADV"), state=tk.DISABLED)
+        self.view_adv_button.grid(row=2, column=2, padx=5, pady=5)
+        
+        status_label_adv = ttk.Label(self.progress_frame, textvariable=self.status_var_adv, wraplength=600)
+        status_label_adv.grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=5)
         
         # Área de log
         log_frame = ttk.LabelFrame(main_frame, text="Registro de actividad", padding="10")
@@ -107,14 +134,10 @@ class LineTab:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=10)
         
-        ttk.Button(button_frame, text="Analizar datos", command=self.start_processing).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Analizar CDV", command=lambda: self.start_processing("CDV")).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Analizar ADV", command=lambda: self.start_processing("ADV")).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Analizar Ambos", command=self.start_both_processing).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Limpiar log", command=self.clear_log).pack(side=tk.RIGHT, padx=5)
-        
-        # Área de visualización de resultados
-        self.results_frame = ttk.LabelFrame(main_frame, text="Visualización de resultados", padding="10")
-        
-        # Inicialmente oculto hasta que haya resultados
-        self.results_frame.pack_forget()
     
     def create_disabled_widgets(self):
         """Crear widgets para pestañas deshabilitadas"""
@@ -148,7 +171,6 @@ class LineTab:
     
     def log(self, message):
         """Añadir mensaje al área de log"""
-        from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.log_text.see(tk.END)
@@ -160,19 +182,36 @@ class LineTab:
     
     def update_progress(self, analysis_type, progress, message):
         """Actualizar barra de progreso y mensaje de estado"""
-        current_analysis_type = self.analysis_type_var.get()
-        
-        # Solo actualizar si corresponde al tipo de análisis actual
-        if analysis_type == current_analysis_type:
+        if analysis_type == "CDV":
             if progress is not None:
-                self.progress_var.set(progress)
+                self.progress_var_cdv.set(progress)
             
             if message:
-                self.status_var.set(message)
-                self.log(message)
+                self.status_var_cdv.set(message)
+                self.log(f"[CDV] {message}")
+                
+            # Actualizar estado de procesamiento
+            if progress == 100:
+                self.cdv_processing_complete = True
+                self.view_cdv_button.config(state=tk.NORMAL)
+                self.log("[CDV] Procesamiento completo. Se puede visualizar el dashboard.")
+        
+        elif analysis_type == "ADV":
+            if progress is not None:
+                self.progress_var_adv.set(progress)
+            
+            if message:
+                self.status_var_adv.set(message)
+                self.log(f"[ADV] {message}")
+                
+            # Actualizar estado de procesamiento
+            if progress == 100:
+                self.adv_processing_complete = True
+                self.view_adv_button.config(state=tk.NORMAL)
+                self.log("[ADV] Procesamiento completo. Se puede visualizar el dashboard.")
     
-    def start_processing(self):
-        """Iniciar procesamiento de datos"""
+    def start_processing(self, analysis_type):
+        """Iniciar procesamiento de datos para un tipo específico"""
         # Verificar que se hayan seleccionado las carpetas
         source_path = self.source_path_var.get()
         dest_path = self.dest_path_var.get()
@@ -187,7 +226,6 @@ class LineTab:
         
         # Obtener datos para procesamiento
         line = self.title.replace("Línea ", "L")
-        analysis_type = self.analysis_type_var.get()
         
         # Verificar umbrales para CDV
         parameters = {}
@@ -208,12 +246,74 @@ class LineTab:
                 messagebox.showerror("Error", "Los factores de umbral deben ser valores numéricos")
                 return
         
-        # Reiniciar la barra de progreso
-        self.progress_var.set(0)
-        self.status_var.set(f"Iniciando procesamiento para {analysis_type}...")
+        # Reiniciar la barra de progreso correspondiente
+        if analysis_type == "CDV":
+            self.progress_var_cdv.set(0)
+            self.status_var_cdv.set(f"Iniciando procesamiento para {analysis_type}...")
+            self.cdv_processing_complete = False
+            self.view_cdv_button.config(state=tk.DISABLED)
+        else:
+            self.progress_var_adv.set(0)
+            self.status_var_adv.set(f"Iniciando procesamiento para {analysis_type}...")
+            self.adv_processing_complete = False
+            self.view_adv_button.config(state=tk.DISABLED)
         
         # Iniciar procesamiento
         success = self.parent_app.start_processing(line, analysis_type, source_path, dest_path, parameters)
         
         if not success:
-            self.log("Error al iniciar el procesamiento")
+            self.log(f"Error al iniciar el procesamiento de {analysis_type}")
+    
+    def start_both_processing(self):
+        """Iniciar procesamiento tanto para CDV como para ADV"""
+        # Verificar que se hayan seleccionado las carpetas
+        source_path = self.source_path_var.get()
+        dest_path = self.dest_path_var.get()
+        
+        if not source_path or not os.path.exists(source_path):
+            messagebox.showerror("Error", "Seleccione una carpeta de origen válida")
+            return
+        
+        if not dest_path or not os.path.exists(dest_path):
+            messagebox.showerror("Error", "Seleccione una carpeta de destino válida")
+            return
+        
+        # Iniciar procesamiento para CDV
+        self.start_processing("CDV")
+        
+        # Iniciar procesamiento para ADV
+        self.start_processing("ADV")
+    
+    def view_results(self, analysis_type):
+        """Visualizar resultados en dashboard web"""
+        try:
+            # Verificar si el procesamiento está completo
+            if analysis_type == "CDV" and not self.cdv_processing_complete:
+                messagebox.showwarning("Aviso", "El procesamiento de CDV no ha finalizado. No hay resultados para visualizar.")
+                return
+            
+            if analysis_type == "ADV" and not self.adv_processing_complete:
+                messagebox.showwarning("Aviso", "El procesamiento de ADV no ha finalizado. No hay resultados para visualizar.")
+                return
+            
+            # Obtener la carpeta de destino
+            dest_path = self.dest_path_var.get()
+            if not dest_path or not os.path.exists(dest_path):
+                messagebox.showerror("Error", "No se puede acceder a la carpeta de resultados.")
+                return
+            
+            # Obtener la línea
+            line = self.title.replace("Línea ", "L")
+            
+            # Inicializar el integrador de dashboard si aún no existe
+            if self.dashboard_integration is None:
+                self.dashboard_integration = DashboardIntegration(dest_path, self.frame.winfo_toplevel())
+            
+            # Lanzar el dashboard
+            self.dashboard_integration.launch_dashboard(line, analysis_type)
+            
+            self.log(f"[{analysis_type}] Lanzando visualización de resultados...")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al visualizar resultados: {str(e)}")
+            self.log(f"Error al visualizar resultados de {analysis_type}: {str(e)}")

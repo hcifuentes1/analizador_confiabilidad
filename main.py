@@ -4,7 +4,7 @@ from ttkthemes import ThemedTk
 
 def main():
     """Función principal que inicia la aplicación"""
-    root = ThemedTk(theme="arc")
+    root = ThemedTk(theme="scidgrey")
     app = MetroAnalyzerApp(root)
     root.mainloop()
 

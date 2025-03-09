@@ -94,7 +94,9 @@ class ADVProcessorL5(BaseProcessor):
         self.df_L5_ADV_DISC = self.df.loc[self.df["Estado"].str.contains('discor', na=False)]
         # Filtrar las filas que contienen "RECONOCIDO" en la columna "Estado"
         self.df_L5_ADV_DISC = self.df_L5_ADV_DISC[~self.df_L5_ADV_DISC['Estado'].str.contains('RECONOCIDO')]
-        self.df_L5_ADV_DISC = self.df_L5_ADV_DISC.drop(columns=['index'])
+        # Comprobar si la columna 'index' existe antes de intentar eliminarla
+        if 'index' in self.df_L5_ADV_DISC.columns:
+            self.df_L5_ADV_DISC = self.df_L5_ADV_DISC.drop(columns=['index'])
         self.df_L5_ADV_DISC = self.df_L5_ADV_DISC.drop(columns=['Subsistema'])
         self.df_L5_ADV_DISC['Fecha Hora'] = self.df_L5_ADV_DISC['Fecha Hora'].astype(str)
         self.df_L5_ADV_DISC['ID'] = self.df_L5_ADV_DISC['Fecha Hora'] + self.df_L5_ADV_DISC['Equipo Estacion']

@@ -10,8 +10,12 @@ from processors.cdv_processor_l5 import CDVProcessorL5
 from processors.adv_processor_l5 import ADVProcessorL5
 from processors.cdv_processor_l1 import CDVProcessorL1
 from processors.adv_processor_l1 import ADVProcessorL1
+from processors.cdv_processor_l4 import CDVProcessorL4
+from processors.adv_processor_l4 import ADVProcessorL4
+from processors.cdv_processor_l4a import CDVProcessorL4A
+from processors.adv_processor_l4a import ADVProcessorL4A
 from gui.line_tabs import LineTab
-from gui.utils.config import Config  # Corregir esta importación
+from gui.utils.config import Config
 
 class MetroAnalyzerApp:
     """Aplicación principal para análisis de datos del Metro"""
@@ -27,17 +31,25 @@ class MetroAnalyzerApp:
         
         # Variables para seguimiento de progreso
         self.message_queue = queue.Queue()
-        self.processing_thread = None
+        self.processing_threads = {}  # Diccionario para almacenar múltiples hilos
         
-        # Procesdores para cada línea y tipo de análisis
+        # Procesadores para cada línea y tipo de análisis
         self.processors = {
             "L1": {
-                "CDV": CDVProcessorL1(),
-                "ADV": ADVProcessorL1()
+                "CDV": CDVProcessorL1,
+                "ADV": ADVProcessorL1
+            },
+            "L4": {
+                "CDV": CDVProcessorL4,
+                "ADV": ADVProcessorL4
+            },
+            "L4A": {
+                "CDV": CDVProcessorL4A,
+                "ADV": ADVProcessorL4A
             },
             "L5": {
-                "CDV": CDVProcessorL5(),
-                "ADV": ADVProcessorL5()
+                "CDV": CDVProcessorL5,
+                "ADV": ADVProcessorL5
             }
         }
         
@@ -57,8 +69,8 @@ class MetroAnalyzerApp:
         self.tabs = {
             "L1": LineTab(self.notebook, "Línea 1", self),
             "L2": LineTab(self.notebook, "Línea 2", self, enabled=False),
-            "L4": LineTab(self.notebook, "Línea 4", self, enabled=False),
-            "L4A": LineTab(self.notebook, "Línea 4A", self, enabled=False),
+            "L4": LineTab(self.notebook, "Línea 4", self),
+            "L4A": LineTab(self.notebook, "Línea 4A", self),  # Habilitada ahora
             "L5": LineTab(self.notebook, "Línea 5", self)
         }
         
@@ -91,8 +103,9 @@ class MetroAnalyzerApp:
             messagebox.showerror("Error", f"No se encontró un procesador para Línea {line}, tipo {analysis_type}")
             return False
         
-        # Obtener el procesador adecuado
-        processor = self.processors[line][analysis_type]
+        # Crear una nueva instancia del procesador para permitir ejecuciones simultáneas
+        processor_class = self.processors[line][analysis_type]
+        processor = processor_class()
         
         # Configurar rutas
         processor.set_paths(source_path, dest_path)
@@ -104,16 +117,22 @@ class MetroAnalyzerApp:
                     setattr(processor, param, value)
         
         # Iniciar procesamiento en un hilo separado
-        self.processing_thread = threading.Thread(
+        thread_key = f"{line}_{analysis_type}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        processing_thread = threading.Thread(
             target=self.run_processing,
-            args=(line, analysis_type, processor)
+            args=(line, analysis_type, processor, thread_key)
         )
-        self.processing_thread.daemon = True
-        self.processing_thread.start()
+        processing_thread.daemon = True
+        
+        # Guardar referencia al hilo
+        self.processing_threads[thread_key] = processing_thread
+        
+        # Iniciar el hilo
+        processing_thread.start()
         
         return True
     
-    def run_processing(self, line, analysis_type, processor):
+    def run_processing(self, line, analysis_type, processor, thread_key):
         """Ejecutar procesamiento en segundo plano"""
         try:
             # Función anónima para retransmitir actualizaciones de progreso
@@ -126,5 +145,14 @@ class MetroAnalyzerApp:
                 progress_callback(100, f"Procesamiento de {analysis_type} completado con éxito")
             else:
                 progress_callback(0, "Error en el procesamiento")
+                
+            # Eliminar la referencia al hilo cuando termina
+            if thread_key in self.processing_threads:
+                del self.processing_threads[thread_key]
+                
         except Exception as e:
             self.message_queue.put((line, analysis_type, 0, f"Error: {str(e)}"))
+            
+            # Eliminar la referencia al hilo en caso de error
+            if thread_key in self.processing_threads:
+                del self.processing_threads[thread_key]
