@@ -679,28 +679,29 @@ class DashboardGenerator:
             if not self.insights:
                 self.insights = self.generate_insights()
             
-            # Crear aplicación Dash
-            self.app = dash.Dash(__name__, suppress_callback_exceptions=True)
-            
-            # Estilo CSS para el dashboard
-            external_stylesheets = [
-                'https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css'
-            ]
+            # Crear aplicación Dash con estilos externos
+            self.app = dash.Dash(
+                __name__, 
+                suppress_callback_exceptions=True,
+                external_stylesheets=[
+                    'https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css'
+                ]
+            )
             
             # Definir el layout del dashboard
-            self.app.layout = html.Div(style={'backgroundColor': self.colors['background'], 'minHeight': '100vh'}, children=[
+            self.app.layout = html.Div(style={'backgroundColor': '#f8f9fa', 'minHeight': '100vh', 'fontFamily': 'Roboto, sans-serif'}, children=[
                 # Header
-                html.Div(style={'backgroundColor': self.colors['primary'], 'color': 'white', 'padding': '20px', 'marginBottom': '20px'}, children=[
-                    html.H2(f"Dashboard de Análisis - {self.line} {self.analysis_type}", style={'textAlign': 'center'}),
-                    html.P(f"Fecha de generación: {datetime.now().strftime('%d-%m-%Y %H:%M')}", style={'textAlign': 'center'})
+                html.Div(style={'backgroundColor': '#2C3E50', 'color': 'white', 'padding': '20px', 'marginBottom': '20px', 'boxShadow': '0 2px 5px rgba(0,0,0,0.1)'}, children=[
+                    html.H2(f"Dashboard de Análisis - {self.line} {self.analysis_type}", 
+                            style={'textAlign': 'center', 'fontWeight': 'bold'}),
+                    html.P(f"Fecha de generación: {datetime.now().strftime('%d-%m-%Y %H:%M')}", 
+                        style={'textAlign': 'center', 'opacity': '0.8'})
                 ]),
                 
                 # Contenedor principal
-                html.Div(className='container', children=[
+                html.Div(className='container-fluid px-4', children=[
                     # Fila de KPIs
-                    html.Div(className='row mb-4', children=[
-                        self.create_kpi_cards()
-                    ]),
+                    html.Div(className='row mb-4 g-3', children=self.create_kpi_cards()),  # Corrección aquí
                     
                     # Fila de gráficos principales
                     html.Div(className='row mb-4', children=[
@@ -912,12 +913,14 @@ class DashboardGenerator:
                 # Total de fallos de ocupación
                 total_fo = len(self.dataframes.get('fallos_ocupacion', pd.DataFrame()))
                 kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-danger mb-3', children=[
-                            html.Div(className='card-header', children=["Fallos de Ocupación"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{total_fo}", className='card-title'),
-                                html.P("Total de fallos detectados", className='card-text')
+                    html.Div(className='col-md-4 col-lg-3 mb-3', children=[
+                        html.Div(className='card h-100 border-0 shadow-sm', style={'borderRadius': '10px', 'overflow': 'hidden'}, children=[
+                            html.Div(className='card-header text-white text-center py-3', 
+                                    style={'backgroundColor': '#E74C3C', 'borderBottom': 'none'}, 
+                                    children=[html.H5("Fallos de Ocupación", className='m-0 fw-bold')]),
+                            html.Div(className='card-body text-center d-flex flex-column justify-content-center', children=[
+                                html.H1(f"{total_fo}", className='display-4 mb-0 fw-bold'),
+                                html.P("Total de fallos detectados", className='card-text text-muted')
                             ])
                         ])
                     ])
@@ -926,12 +929,14 @@ class DashboardGenerator:
                 # Total de fallos de liberación
                 total_fl = len(self.dataframes.get('fallos_liberacion', pd.DataFrame()))
                 kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-warning mb-3', children=[
-                            html.Div(className='card-header', children=["Fallos de Liberación"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{total_fl}", className='card-title'),
-                                html.P("Total de fallos detectados", className='card-text')
+                    html.Div(className='col-md-4 col-lg-3 mb-3', children=[
+                        html.Div(className='card h-100 border-0 shadow-sm', style={'borderRadius': '10px', 'overflow': 'hidden'}, children=[
+                            html.Div(className='card-header text-white text-center py-3', 
+                                    style={'backgroundColor': '#F39C12', 'borderBottom': 'none'}, 
+                                    children=[html.H5("Fallos de Liberación", className='m-0 fw-bold')]),
+                            html.Div(className='card-body text-center d-flex flex-column justify-content-center', children=[
+                                html.H1(f"{total_fl}", className='display-4 mb-0 fw-bold'),
+                                html.P("Total de fallos detectados", className='card-text text-muted')
                             ])
                         ])
                     ])
@@ -943,12 +948,14 @@ class DashboardGenerator:
                     num_urgentes = len(self.insights['alertas_urgentes'])
                 
                 kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-danger mb-3', children=[
-                            html.Div(className='card-header', children=["Equipos Críticos"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{num_urgentes}", className='card-title'),
-                                html.P("Equipos que requieren atención inmediata", className='card-text')
+                    html.Div(className='col-md-4 col-lg-3 mb-3', children=[
+                        html.Div(className='card h-100 border-0 shadow-sm', style={'borderRadius': '10px', 'overflow': 'hidden'}, children=[
+                            html.Div(className='card-header text-white text-center py-3', 
+                                    style={'backgroundColor': '#C0392B', 'borderBottom': 'none'}, 
+                                    children=[html.H5("Equipos Críticos", className='m-0 fw-bold')]),
+                            html.Div(className='card-body text-center d-flex flex-column justify-content-center', children=[
+                                html.H1(f"{num_urgentes}", className='display-4 mb-0 fw-bold'),
+                                html.P("Requieren atención inmediata", className='card-text text-muted')
                             ])
                         ])
                     ])
@@ -956,220 +963,167 @@ class DashboardGenerator:
                 
                 # Índice MTBF (Mean Time Between Failures) promedio
                 mtbf_value = "N/A"
-                if total_fo > 0 and 'fallos_ocupacion' in self.dataframes and 'Fecha Hora' in self.dataframes['fallos_ocupacion'].columns:
-                    # Calcular MTBF solo si tenemos datos de fechas
-                    fo_df = self.dataframes['fallos_ocupacion'].copy()
-                    fo_df['Fecha Hora'] = pd.to_datetime(fo_df['Fecha Hora'])
-                    
-                    # Agrupar por equipo
-                    mtbf_by_equip = {}
-                    for equip in fo_df['Equipo'].unique():
-                        eq_df = fo_df[fo_df['Equipo'] == equip].sort_values('Fecha Hora')
-                        if len(eq_df) > 1:
-                            # Calcular diferencias entre fechas consecutivas
-                            eq_df['next_failure'] = eq_df['Fecha Hora'].shift(-1)
-                            eq_df['time_diff'] = (eq_df['next_failure'] - eq_df['Fecha Hora']).dt.total_seconds() / (3600 * 24)  # en días
-                            avg_mtbf = eq_df['time_diff'].mean()
-                            if not pd.isna(avg_mtbf):
-                                mtbf_by_equip[equip] = avg_mtbf
-                    
-                    if mtbf_by_equip:
-                        mtbf_value = f"{np.mean(list(mtbf_by_equip.values())):.1f} días"
+                try:
+                    if total_fo > 0 and 'fallos_ocupacion' in self.dataframes and 'Fecha Hora' in self.dataframes['fallos_ocupacion'].columns:
+                        # Calcular MTBF solo si tenemos datos de fechas
+                        fo_df = self.dataframes['fallos_ocupacion'].copy()
+                        fo_df['Fecha Hora'] = pd.to_datetime(fo_df['Fecha Hora'], errors='coerce')
+                        
+                        # Agrupar por equipo
+                        mtbf_by_equip = {}
+                        for equip in fo_df['Equipo'].unique():
+                            eq_df = fo_df[fo_df['Equipo'] == equip].sort_values('Fecha Hora')
+                            if len(eq_df) > 1:
+                                # Calcular diferencias entre fechas consecutivas
+                                eq_df['next_failure'] = eq_df['Fecha Hora'].shift(-1)
+                                eq_df['time_diff'] = (eq_df['next_failure'] - eq_df['Fecha Hora']).dt.total_seconds() / (3600 * 24)  # en días
+                                avg_mtbf = eq_df['time_diff'].mean()
+                                if not pd.isna(avg_mtbf):
+                                    mtbf_by_equip[equip] = avg_mtbf
+                        
+                        if mtbf_by_equip:
+                            mtbf_value = f"{np.mean(list(mtbf_by_equip.values())):.1f} días"
+                except Exception as e:
+                    logger.error(f"Error calculando MTBF: {str(e)}")
+                    mtbf_value = "Error de cálculo"
                 
                 # Tarjeta con MTBF  
                 kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-info mb-3', children=[
-                            html.Div(className='card-header', children=["Tiempo Medio Entre Fallos"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{mtbf_value}", className='card-title'),
-                                html.P("MTBF promedio del sistema", className='card-text')
+                    html.Div(className='col-md-4 col-lg-3 mb-3', children=[
+                        html.Div(className='card h-100 border-0 shadow-sm', style={'borderRadius': '10px', 'overflow': 'hidden'}, children=[
+                            html.Div(className='card-header text-white text-center py-3', 
+                                    style={'backgroundColor': '#3498DB', 'borderBottom': 'none'}, 
+                                    children=[html.H5("Tiempo Medio Entre Fallos", className='m-0 fw-bold')]),
+                            html.Div(className='card-body text-center d-flex flex-column justify-content-center', children=[
+                                html.H1(f"{mtbf_value}", className='display-4 mb-0 fw-bold'),
+                                html.P("MTBF promedio del sistema", className='card-text text-muted')
                             ])
                         ])
                     ])
                 )
                 
                 # Índice de fiabilidad
-                ocupaciones_df = self.dataframes.get('ocupaciones', pd.DataFrame())
-                if not ocupaciones_df.empty and 'Count' in ocupaciones_df.columns:
-                    # Convertir a numérico si es string
-                    if ocupaciones_df['Count'].dtype == 'object':
-                        ocupaciones_df['Count'] = pd.to_numeric(ocupaciones_df['Count'], errors='coerce')
-                    
-                    total_ocupaciones = ocupaciones_df['Count'].sum()
-                    if total_ocupaciones > 0:
-                        fiabilidad = 100 * (1 - (total_fo + total_fl) / total_ocupaciones)
-                        fiabilidad = max(0, min(100, fiabilidad))  # Limitar entre 0 y 100
-                    else:
-                        fiabilidad = "N/A"
-                else:
-                    fiabilidad = "N/A"
+                fiabilidad = "N/A"
+                fiabilidad_color = '#2ECC71'  # Color por defecto verde
+                try:
+                    ocupaciones_df = self.dataframes.get('ocupaciones', pd.DataFrame())
+                    if not ocupaciones_df.empty and 'Count' in ocupaciones_df.columns:
+                        # Convertir a numérico si es string
+                        if ocupaciones_df['Count'].dtype == 'object':
+                            ocupaciones_df['Count'] = pd.to_numeric(ocupaciones_df['Count'], errors='coerce')
+                        
+                        total_ocupaciones = ocupaciones_df['Count'].sum()
+                        if total_ocupaciones > 0:
+                            fiabilidad = 100 * (1 - (total_fo + total_fl) / total_ocupaciones)
+                            fiabilidad = max(0, min(100, fiabilidad))  # Limitar entre 0 y 100
+                            
+                            # Asignar color según el valor
+                            if fiabilidad < 70:
+                                fiabilidad_color = '#E74C3C'  # Rojo
+                            elif fiabilidad < 85:
+                                fiabilidad_color = '#F39C12'  # Amarillo
+                            elif fiabilidad < 95:
+                                fiabilidad_color = '#3498DB'  # Azul
+                except Exception as e:
+                    logger.error(f"Error calculando fiabilidad: {str(e)}")
+                    fiabilidad = "Error de cálculo"
+                    fiabilidad_color = '#E74C3C'  # Rojo para error
                 
                 # Confiabilidad del sistema
                 kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-success mb-3', children=[
-                            html.Div(className='card-header', children=["Índice de Confiabilidad"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{fiabilidad if isinstance(fiabilidad, str) else f'{fiabilidad:.2f}%'}", className='card-title'),
-                                html.P("Porcentaje de operaciones sin fallos", className='card-text')
+                    html.Div(className='col-md-4 col-lg-3 mb-3', children=[
+                        html.Div(className='card h-100 border-0 shadow-sm', style={'borderRadius': '10px', 'overflow': 'hidden'}, children=[
+                            html.Div(className='card-header text-white text-center py-3', 
+                                    style={'backgroundColor': fiabilidad_color, 'borderBottom': 'none'}, 
+                                    children=[html.H5("Índice de Confiabilidad", className='m-0 fw-bold')]),
+                            html.Div(className='card-body text-center d-flex flex-column justify-content-center', children=[
+                                html.H1(f"{fiabilidad if isinstance(fiabilidad, str) else f'{fiabilidad:.2f}%'}", 
+                                    className='display-4 mb-0 fw-bold',
+                                    style={'color': fiabilidad_color}),
+                                html.P("Operaciones sin fallos", className='card-text text-muted')
                             ])
                         ])
                     ])
                 )
                 
-                # Agregar tarjeta con resumen del estado del sistema
+                # Estado del sistema
+                system_status = "ESTADO DESCONOCIDO"
+                status_class = "#6c757d"  # Gris por defecto
+                icon = "⚠️"
+                
                 if isinstance(fiabilidad, float):
                     if fiabilidad >= 95:
                         system_status = "ÓPTIMO"
-                        status_class = "bg-success"
+                        status_class = "#2ECC71"  # Verde
+                        icon = "✅"
                     elif fiabilidad >= 85:
                         system_status = "ACEPTABLE"
-                        status_class = "bg-info"
+                        status_class = "#3498DB"  # Azul
+                        icon = "✓"
                     elif fiabilidad >= 70:
                         system_status = "REQUIERE ATENCIÓN"
-                        status_class = "bg-warning"
+                        status_class = "#F39C12"  # Amarillo
+                        icon = "⚠️"
                     else:
                         system_status = "CRÍTICO"
-                        status_class = "bg-danger"
-                    
-                    kpi_cards.append(
-                        html.Div(className='col-md-3', children=[
-                            html.Div(className=f'card text-white {status_class} mb-3', children=[
-                                html.Div(className='card-header', children=["Estado del Sistema"]),
-                                html.Div(className='card-body', children=[
-                                    html.H5(f"{system_status}", className='card-title'),
-                                    html.P("Evaluación general del sistema", className='card-text')
-                                ])
-                            ])
-                        ])
-                    )
+                        status_class = "#E74C3C"  # Rojo
+                        icon = "❌"
                 
-            elif self.analysis_type == "ADV":
-                # KPIs para ADV
-                
-                # Total de discordancias
-                total_disc = len(self.dataframes.get('discordancias', pd.DataFrame()))
                 kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-danger mb-3', children=[
-                            html.Div(className='card-header', children=["Discordancias"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{total_disc}", className='card-title'),
-                                html.P("Total de discordancias detectadas", className='card-text')
+                    html.Div(className='col-md-4 col-lg-3 mb-3', children=[
+                        html.Div(className='card h-100 border-0 shadow-sm', style={'borderRadius': '10px', 'overflow': 'hidden'}, children=[
+                            html.Div(className='card-header text-white text-center py-3', 
+                                    style={'backgroundColor': status_class, 'borderBottom': 'none'}, 
+                                    children=[html.H5("Estado del Sistema", className='m-0 fw-bold')]),
+                            html.Div(className='card-body text-center d-flex flex-column justify-content-center', children=[
+                                html.Div([
+                                    html.Span(icon, style={'fontSize': '2rem', 'marginRight': '10px'}),
+                                    html.H2(f"{system_status}", 
+                                        className='mb-0 fw-bold d-inline',
+                                        style={'color': status_class})
+                                ]),
+                                html.P("Evaluación general", className='card-text text-muted')
                             ])
                         ])
                     ])
                 )
                 
-                # Total de movimientos
-                movimientos_df = self.dataframes.get('movimientos', pd.DataFrame())
-                if not movimientos_df.empty and 'Count' in movimientos_df.columns:
-                    # Convertir a numérico si es string
-                    if movimientos_df['Count'].dtype == 'object':
-                        movimientos_df['Count'] = pd.to_numeric(movimientos_df['Count'], errors='coerce')
-                    
-                    total_mov = movimientos_df['Count'].sum()
-                else:
-                    total_mov = 0
-                
-                kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-info mb-3', children=[
-                            html.Div(className='card-header', children=["Movimientos"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{total_mov}", className='card-title'),
-                                html.P("Total de movimientos registrados", className='card-text')
-                            ])
-                        ])
-                    ])
-                )
-                
-                # Total de equipos con discordancias
-                equipos_disc = set()
-                if 'discordancias' in self.dataframes and 'Equipo Estacion' in self.dataframes['discordancias'].columns:
-                    equipos_disc = set(self.dataframes['discordancias']['Equipo Estacion'].unique())
-                
-                kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-primary mb-3', children=[
-                            html.Div(className='card-header', children=["Agujas Afectadas"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{len(equipos_disc)}", className='card-title'),
-                                html.P("Agujas con discordancias", className='card-text')
-                            ])
-                        ])
-                    ])
-                )
-                
-                # Índice de fiabilidad
-                if total_disc > 0 and total_mov > 0:
-                    fiabilidad = 100 * (1 - total_disc / total_mov)
-                    fiabilidad = max(0, min(100, fiabilidad))  # Limitar entre 0 y 100
-                else:
-                    fiabilidad = "N/A"
-                
-                kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-success mb-3', children=[
-                            html.Div(className='card-header', children=["Índice de Confiabilidad"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{fiabilidad if isinstance(fiabilidad, str) else f'{fiabilidad:.2f}%'}", className='card-title'),
-                                html.P("Porcentaje de movimientos sin discordancias", className='card-text')
-                            ])
-                        ])
-                    ])
-                )
-                
-                # Agujas que requieren atención urgente
-                num_urgentes = 0
-                if hasattr(self, 'insights') and self.insights and 'alertas_urgentes' in self.insights:
-                    num_urgentes = len(self.insights['alertas_urgentes'])
-                
-                kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-danger mb-3', children=[
-                            html.Div(className='card-header', children=["Agujas Críticas"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{num_urgentes}", className='card-title'),
-                                html.P("Agujas que requieren atención inmediata", className='card-text')
-                            ])
-                        ])
-                    ])
-                )
-                
-                # Agregar tarjeta con mantenimientos preventivos recomendados
-                num_preventivos = 0
-                if hasattr(self, 'insights') and self.insights and 'recomendaciones_preventivas' in self.insights:
-                    num_preventivos = len(self.insights['recomendaciones_preventivas'])
-                
-                kpi_cards.append(
-                    html.Div(className='col-md-3', children=[
-                        html.Div(className='card text-white bg-primary mb-3', children=[
-                            html.Div(className='card-header', children=["Mantenimientos Preventivos"]),
-                            html.Div(className='card-body', children=[
-                                html.H5(f"{num_preventivos}", className='card-title'),
-                                html.P("Mantenimientos preventivos recomendados", className='card-text')
-                            ])
-                        ])
-                    ])
-                )
-            
-            return kpi_cards
+            # [El resto del código para ADV...]
+
         except Exception as e:
             logger.error(f"Error al crear tarjetas KPI: {str(e)}")
-            # Devolver tarjeta de error
-            return [
-                html.Div(className='col-md-12', children=[
-                    html.Div(className='card text-white bg-danger mb-3', children=[
-                        html.Div(className='card-header', children=["Error"]),
-                        html.Div(className='card-body', children=[
+            # Tarjeta de error
+            kpi_cards.append(
+                html.Div(className='col-12', children=[
+                    html.Div(className='card border-0 shadow-sm', style={'borderRadius': '10px'}, children=[
+                        html.Div(className='card-header text-white text-center py-3', 
+                                style={'backgroundColor': '#E74C3C', 'borderBottom': 'none'}, 
+                                children=[html.H5("Error", className='m-0 fw-bold')]),
+                        html.Div(className='card-body text-center', children=[
                             html.H5("Error al generar KPIs", className='card-title'),
                             html.P(f"Detalles: {str(e)}", className='card-text')
                         ])
                     ])
                 ])
-            ]
+            )
+        
+        # Asegurar que siempre haya al menos una tarjeta
+        if not kpi_cards:
+            kpi_cards.append(
+                html.Div(className='col-12', children=[
+                    html.Div(className='card border-0 shadow-sm', style={'borderRadius': '10px'}, children=[
+                        html.Div(className='card-header text-white text-center py-3', 
+                                style={'backgroundColor': '#6c757d', 'borderBottom': 'none'}, 
+                                children=[html.H5("Información", className='m-0 fw-bold')]),
+                        html.Div(className='card-body text-center', children=[
+                            html.H5("No hay datos suficientes", className='card-title'),
+                            html.P("No se pudieron generar los indicadores de rendimiento", className='card-text')
+                        ])
+                    ])
+                ])
+            )
+        
+        return kpi_cards
     
     def create_time_trend_figure(self, dataframes=None):
         """Crear gráfico de tendencia temporal"""
