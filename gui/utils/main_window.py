@@ -6,14 +6,16 @@ import queue
 from datetime import datetime
 from ttkthemes import ThemedTk
 
-from processors.cdv_processor_l5 import CDVProcessorL5
-from processors.adv_processor_l5 import ADVProcessorL5
 from processors.cdv_processor_l1 import CDVProcessorL1
 from processors.adv_processor_l1 import ADVProcessorL1
+from processors.cdv_processor_l2 import CDVProcessorL2
+from processors.adv_processor_l2 import ADVProcessorL2
 from processors.cdv_processor_l4 import CDVProcessorL4
 from processors.adv_processor_l4 import ADVProcessorL4
 from processors.cdv_processor_l4a import CDVProcessorL4A
 from processors.adv_processor_l4a import ADVProcessorL4A
+from processors.cdv_processor_l5 import CDVProcessorL5
+from processors.adv_processor_l5 import ADVProcessorL5
 from gui.line_tabs import LineTab
 from gui.utils.config import Config
 
@@ -38,6 +40,10 @@ class MetroAnalyzerApp:
             "L1": {
                 "CDV": CDVProcessorL1,
                 "ADV": ADVProcessorL1
+            },
+            "L2": {
+                "CDV": CDVProcessorL2,
+                "ADV": ADVProcessorL2
             },
             "L4": {
                 "CDV": CDVProcessorL4,
@@ -68,9 +74,9 @@ class MetroAnalyzerApp:
         # Crear pestañas para cada línea
         self.tabs = {
             "L1": LineTab(self.notebook, "Línea 1", self),
-            "L2": LineTab(self.notebook, "Línea 2", self, enabled=False),
+            "L2": LineTab(self.notebook, "Línea 2", self),  # Habilitada ahora
             "L4": LineTab(self.notebook, "Línea 4", self),
-            "L4A": LineTab(self.notebook, "Línea 4A", self),  # Habilitada ahora
+            "L4A": LineTab(self.notebook, "Línea 4A", self),
             "L5": LineTab(self.notebook, "Línea 5", self)
         }
         
