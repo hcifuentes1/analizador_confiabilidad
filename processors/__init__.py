@@ -10,6 +10,7 @@ from processors.cdv_processor_l4a import CDVProcessorL4A
 from processors.adv_processor_l4a import ADVProcessorL4A
 from processors.cdv_processor_l5 import CDVProcessorL5
 from processors.adv_processor_l5 import ADVProcessorL5
+from processors.velcom_processor import VelcomProcessor
 
 __all__ = [
     'BaseProcessor',
@@ -22,5 +23,6 @@ __all__ = [
     'CDVProcessorL4A',
     'ADVProcessorL4A',
     'CDVProcessorL5',
-    'ADVProcessorL5'
+    'ADVProcessorL5',
+    'VelcomProcessor'
 ]

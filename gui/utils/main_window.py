@@ -102,6 +102,8 @@ class MetroAnalyzerApp:
         # Programar próxima verificación
         self.root.after(100, self.check_message_queue)
     
+    # Actualización del método start_processing en gui/utils/main_window.py
+
     def start_processing(self, line, analysis_type, source_path, dest_path, parameters=None):
         """Iniciar procesamiento para una línea y tipo de análisis específico"""
         # Verificar si existe el procesador para la combinación
@@ -119,7 +121,10 @@ class MetroAnalyzerApp:
         # Configurar parámetros adicionales si existen
         if parameters:
             for param, value in parameters.items():
-                if hasattr(processor, param):
+                if param == "data_type" and hasattr(processor, "set_data_type"):
+                    # Método específico para establecer tipo de datos
+                    processor.set_data_type(value)
+                elif hasattr(processor, param):
                     setattr(processor, param, value)
         
         # Iniciar procesamiento en un hilo separado

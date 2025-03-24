@@ -14,18 +14,32 @@ class ADVProcessorL2(BaseProcessor):
         self.df = None
         self.df_L2_ADV_DISC = None  # Discordancias de agujas
         self.df_L2_ADV_MOV = None   # Movimientos de agujas
+        
+        # Atributo para el tipo de datos
+        self.data_type = "Sacem"  # Valor por defecto
+    
+    def set_data_type(self, data_type):
+        """Establecer tipo de datos (Sacem o SCADA)"""
+        self.data_type = data_type
     
     def find_files(self):
         """Encontrar archivos CSV/Excel para análisis ADV de Línea 2"""
         self.data_files = []
         if not os.path.exists(self.root_folder_path):
             raise FileNotFoundError(f"La ruta {self.root_folder_path} no existe")
-            
+        
         # Recorrer carpetas y encontrar archivos CSV o Excel
         for root, dirs, files in os.walk(self.root_folder_path):
             for file in files:
-                if file.endswith(('.xlsx', '.xls', '.csv')) and ('AGS' in file or 'adv' in file.lower() or 'aguja' in file.lower()):
-                    self.data_files.append(os.path.join(root, file))
+                # Filtrar según el tipo de datos
+                if self.data_type == "Sacem":
+                    # Buscar archivos de Sacem relacionados con agujas
+                    if file.endswith(('.xlsx', '.xls', '.csv')) and ('AGS' in file or 'adv' in file.lower() or 'aguja' in file.lower()):
+                        self.data_files.append(os.path.join(root, file))
+                elif self.data_type == "SCADA":
+                    # En el futuro, aquí se implementará la lógica para archivos SCADA
+                    # Por ahora, solo registramos que está en desarrollo
+                    continue
         
         return len(self.data_files)
     

@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import os
+import threading
 from datetime import datetime
 from dashboard.dashboard_integration import DashboardIntegration
 
@@ -20,6 +21,9 @@ class LineTab:
         self.f_oc_1_var = tk.StringVar(value="0.1")
         self.f_lb_2_var = tk.StringVar(value="0.05")
         self.analysis_type_var = tk.StringVar(value="CDV")
+        
+        # Variable para tipo de datos (Sacem o SCADA) - Nueva variable
+        self.data_type_var = tk.StringVar(value="Sacem")
         
         # Variables para seguimiento de progreso
         self.progress_var_cdv = tk.DoubleVar()
@@ -58,6 +62,16 @@ class LineTab:
         ttk.Radiobutton(analysis_frame, text="Agujas (ADV)", variable=self.analysis_type_var, 
                        value="ADV", command=self.toggle_analysis_type).grid(row=0, column=1, padx=20, pady=5, sticky=tk.W)
         
+        # Sección de selección de tipo de datos (solo para Línea 2)
+        if self.title == "Línea 2":
+            data_type_frame = ttk.LabelFrame(main_frame, text="Tipo de Datos", padding="10")
+            data_type_frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            ttk.Radiobutton(data_type_frame, text="Datos Sacem", variable=self.data_type_var, 
+                           value="Sacem").grid(row=0, column=0, padx=20, pady=5, sticky=tk.W)
+            ttk.Radiobutton(data_type_frame, text="Datos SCADA (En desarrollo)", variable=self.data_type_var, 
+                           value="SCADA", state=tk.DISABLED).grid(row=0, column=1, padx=20, pady=5, sticky=tk.W)
+        
         # Sección de selección de carpetas
         folder_frame = ttk.LabelFrame(main_frame, text="Rutas de archivos", padding="10")
         folder_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -89,6 +103,49 @@ class LineTab:
         ttk.Label(self.cdv_config_frame, 
                  text="Valor entre 0 y 1. Menor valor = más sensible en detección de fallos de liberación").grid(
             row=1, column=2, sticky=tk.W, padx=10)
+        
+        # Después de la sección de configuración CDV, añadir sección para Velcom (solo para Línea 2)
+        if self.title == "Línea 2":
+            self.velcom_frame = ttk.LabelFrame(main_frame, text="Procesar Datos Velcom", padding="10")
+            self.velcom_frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            # Variables para Velcom
+            self.velcom_file_var = tk.StringVar()
+            self.velcom_output_var = tk.StringVar()
+            
+            # Selector de archivo Velcom
+            ttk.Label(self.velcom_frame, text="Archivo Velcom (.dat):").grid(row=0, column=0, sticky=tk.W, pady=5)
+            ttk.Entry(self.velcom_frame, textvariable=self.velcom_file_var, width=60).grid(row=0, column=1, padx=5, pady=5)
+            ttk.Button(self.velcom_frame, text="Examinar...", command=self.browse_velcom_file).grid(row=0, column=2, padx=5, pady=5)
+            
+            # Carpeta de salida para resultados Velcom
+            ttk.Label(self.velcom_frame, text="Carpeta de resultados:").grid(row=1, column=0, sticky=tk.W, pady=5)
+            ttk.Entry(self.velcom_frame, textvariable=self.velcom_output_var, width=60).grid(row=1, column=1, padx=5, pady=5)
+            ttk.Button(self.velcom_frame, text="Examinar...", command=self.browse_velcom_output).grid(row=1, column=2, padx=5, pady=5)
+            
+            # Barra de progreso y botón para procesar
+            ttk.Label(self.velcom_frame, text="Progreso:").grid(row=2, column=0, sticky=tk.W, pady=5)
+            self.velcom_progress_var = tk.DoubleVar()
+            self.velcom_progress_bar = ttk.Progressbar(self.velcom_frame, variable=self.velcom_progress_var, length=550, mode="determinate")
+            self.velcom_progress_bar.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W+tk.E)
+            
+            # Botón para procesar
+            self.process_velcom_button = ttk.Button(self.velcom_frame, text="Procesar Velcom", command=self.process_velcom)
+            self.process_velcom_button.grid(row=2, column=2, padx=5, pady=5)
+            
+            # Status de procesamiento
+            self.velcom_status_var = tk.StringVar(value="Listo para procesar Velcom")
+            status_label_velcom = ttk.Label(self.velcom_frame, textvariable=self.velcom_status_var, wraplength=600)
+            status_label_velcom.grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=5)
+            
+            # Botón para visualizar dashboard
+            self.view_velcom_button = ttk.Button(
+                self.velcom_frame, 
+                text="Visualizar Dashboard Velcom", 
+                command=self.view_velcom_dashboard, 
+                state=tk.DISABLED
+            )
+            self.view_velcom_button.grid(row=4, column=0, columnspan=3, padx=5, pady=5)
         
         # Sección de progreso y estado
         self.progress_frame = ttk.LabelFrame(main_frame, text="Progreso del Procesamiento", padding="10")
@@ -133,11 +190,12 @@ class LineTab:
         # Botones de acción
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=10)
-        
-        ttk.Button(button_frame, text="Analizar CDV", command=lambda: self.start_processing("CDV")).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(button_frame, text="Analizar ADV", command=lambda: self.start_processing("ADV")).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(button_frame, text="Analizar Ambos", command=self.start_both_processing).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(button_frame, text="Limpiar log", command=self.clear_log).pack(side=tk.RIGHT, padx=5)
+
+        # Usar grid() para mejor control de posición
+        ttk.Button(button_frame, text="Analizar CDV", command=lambda: self.start_processing("CDV")).grid(row=0, column=3, padx=5, pady=5)
+        ttk.Button(button_frame, text="Analizar ADV", command=lambda: self.start_processing("ADV")).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Button(button_frame, text="Analizar Ambos", command=self.start_both_processing).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(button_frame, text="Limpiar log", command=self.clear_log).grid(row=0, column=0, padx=5, pady=5)
     
     def create_disabled_widgets(self):
         """Crear widgets para pestañas deshabilitadas"""
@@ -169,6 +227,23 @@ class LineTab:
             self.dest_path_var.set(folder_path)
             self.log(f"Carpeta de destino seleccionada: {folder_path}")
     
+    def browse_velcom_file(self):
+        """Seleccionar archivo Velcom"""
+        file_path = filedialog.askopenfilename(
+            title="Seleccionar archivo Velcom",
+            filetypes=[("Archivos DAT", "*.dat"), ("Archivos TXT", "*.txt"), ("Todos los archivos", "*.*")]
+        )
+        if file_path:
+            self.velcom_file_var.set(file_path)
+            self.log(f"Archivo Velcom seleccionado: {file_path}")
+
+    def browse_velcom_output(self):
+        """Seleccionar carpeta de salida para resultados Velcom"""
+        folder_path = filedialog.askdirectory(title="Seleccionar carpeta para resultados Velcom")
+        if folder_path:
+            self.velcom_output_var.set(folder_path)
+            self.log(f"Carpeta de resultados Velcom seleccionada: {folder_path}")
+    
     def log(self, message):
         """Añadir mensaje al área de log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -179,36 +254,6 @@ class LineTab:
         """Limpiar el área de log"""
         self.log_text.delete(1.0, tk.END)
         self.log("Log limpiado")
-    
-    def update_progress(self, analysis_type, progress, message):
-        """Actualizar barra de progreso y mensaje de estado"""
-        if analysis_type == "CDV":
-            if progress is not None:
-                self.progress_var_cdv.set(progress)
-            
-            if message:
-                self.status_var_cdv.set(message)
-                self.log(f"[CDV] {message}")
-                
-            # Actualizar estado de procesamiento
-            if progress == 100:
-                self.cdv_processing_complete = True
-                self.view_cdv_button.config(state=tk.NORMAL)
-                self.log("[CDV] Procesamiento completo. Se puede visualizar el dashboard.")
-        
-        elif analysis_type == "ADV":
-            if progress is not None:
-                self.progress_var_adv.set(progress)
-            
-            if message:
-                self.status_var_adv.set(message)
-                self.log(f"[ADV] {message}")
-                
-            # Actualizar estado de procesamiento
-            if progress == 100:
-                self.adv_processing_complete = True
-                self.view_adv_button.config(state=tk.NORMAL)
-                self.log("[ADV] Procesamiento completo. Se puede visualizar el dashboard.")
     
     def start_processing(self, analysis_type):
         """Iniciar procesamiento de datos para un tipo específico"""
@@ -226,6 +271,17 @@ class LineTab:
         
         # Obtener datos para procesamiento
         line = self.title.replace("Línea ", "L")
+        
+        # Obtener tipo de datos para Línea 2
+        data_type = "Sacem"  # Valor por defecto
+        if hasattr(self, 'data_type_var'):
+            data_type = self.data_type_var.get()
+            
+            # Verificar si se seleccionó SCADA para L2 (aún no implementado)
+            if data_type == "SCADA" and line == "L2":
+                messagebox.showinfo("Información", "El análisis con datos SCADA para Línea 2 está en desarrollo y no disponible en esta versión.")
+                self.log("El análisis con datos SCADA para Línea 2 está en desarrollo")
+                return
         
         # Verificar umbrales para CDV
         parameters = {}
@@ -245,6 +301,13 @@ class LineTab:
             except ValueError:
                 messagebox.showerror("Error", "Los factores de umbral deben ser valores numéricos")
                 return
+        
+        # Añadir tipo de datos a los parámetros
+        parameters['data_type'] = data_type
+        
+        # Registrar en el log el tipo de datos seleccionado
+        if line == "L2":
+            self.log(f"Tipo de datos seleccionado: {data_type}")
         
         # Reiniciar la barra de progreso correspondiente
         if analysis_type == "CDV":
@@ -283,6 +346,144 @@ class LineTab:
         
         # Iniciar procesamiento para ADV
         self.start_processing("ADV")
+    
+    def process_velcom(self):
+        """Procesar archivo Velcom"""
+        # Verificar que se hayan seleccionado las rutas
+        velcom_file = self.velcom_file_var.get()
+        output_path = self.velcom_output_var.get()
+        
+        if not velcom_file or not os.path.exists(velcom_file):
+            messagebox.showerror("Error", "Seleccione un archivo Velcom válido")
+            return
+        
+        if not output_path or not os.path.exists(output_path):
+            messagebox.showerror("Error", "Seleccione una carpeta de destino válida")
+            return
+        
+        # Reiniciar barra de progreso
+        self.velcom_progress_var.set(0)
+        self.velcom_status_var.set("Iniciando procesamiento de Velcom...")
+        self.view_velcom_button.config(state=tk.DISABLED)
+        
+        # Importar el procesador Velcom
+        try:
+            from processors.velcom_processor import VelcomProcessor
+            processor = VelcomProcessor()
+            processor.set_paths(velcom_file, output_path)
+            processor.set_progress_callback(self.update_velcom_progress)
+            
+            # Iniciar procesamiento en un hilo separado
+            processing_thread = threading.Thread(
+                target=self._run_velcom_processing,
+                args=(processor,)
+            )
+            processing_thread.daemon = True
+            processing_thread.start()
+            
+            self.log("Procesamiento de Velcom iniciado en segundo plano")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al iniciar procesamiento: {str(e)}")
+            self.log(f"Error al iniciar procesamiento de Velcom: {str(e)}")
+
+    def _run_velcom_processing(self, processor):
+        """Ejecutar procesamiento Velcom en segundo plano"""
+        try:
+            success = processor.process_file()
+            
+            # Actualizar UI en el hilo principal
+            self.frame.after(100, lambda: self._finish_velcom_processing(success))
+            
+        except Exception as e:
+            # Manejar errores y actualizar UI en el hilo principal
+            self.frame.after(
+                100, 
+                lambda: self.update_velcom_progress(0, f"Error en procesamiento: {str(e)}")
+            )
+
+    def _finish_velcom_processing(self, success):
+        """Finalizar procesamiento Velcom"""
+        if success:
+            self.velcom_progress_var.set(100)
+            self.velcom_status_var.set("Procesamiento de Velcom completado")
+            self.view_velcom_button.config(state=tk.NORMAL)
+            self.log("Procesamiento de Velcom completado con éxito")
+        else:
+            self.view_velcom_button.config(state=tk.DISABLED)
+            self.log("Procesamiento de Velcom finalizado con errores")
+
+    def update_velcom_progress(self, progress, message):
+        """Actualizar progreso de procesamiento Velcom"""
+        self.velcom_progress_var.set(progress)
+        if message:
+            self.velcom_status_var.set(message)
+            self.log(f"[Velcom] {message}")
+
+    def view_velcom_dashboard(self):
+        """Mostrar dashboard de datos Velcom"""
+        output_path = self.velcom_output_var.get()
+        
+        if not output_path or not os.path.exists(output_path):
+            messagebox.showerror("Error", "No se puede acceder a la carpeta de resultados")
+            return
+        
+        try:
+            from dashboard.velcom_dashboard import launch_velcom_dashboard
+            
+            # Verificar que existan los archivos procesados
+            required_files = [
+                'velcom_data.csv',
+                'velcom_trains.csv',
+                'velcom_stations.csv',
+                'velcom_info.csv'
+            ]
+            
+            for file in required_files:
+                if not os.path.exists(os.path.join(output_path, file)):
+                    messagebox.showerror(
+                        "Error", 
+                        f"Archivo de datos {file} no encontrado. Verifique que el procesamiento se haya completado correctamente."
+                    )
+                    return
+            
+            # Lanzar dashboard
+            launch_velcom_dashboard(output_path)
+            self.log("Dashboard de Velcom lanzado")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al lanzar dashboard: {str(e)}")
+            self.log(f"Error al lanzar dashboard de Velcom: {str(e)}")
+    
+    def update_progress(self, analysis_type, progress, message):
+        """Actualizar barra de progreso y mensaje de estado"""
+        if analysis_type == "CDV":
+            if progress is not None:
+                self.progress_var_cdv.set(progress)
+            
+            if message:
+                self.status_var_cdv.set(message)
+                self.log(f"[CDV] {message}")
+                
+            # Actualizar estado de procesamiento
+            if progress == 100:
+                self.cdv_processing_complete = True
+                self.view_cdv_button.config(state=tk.NORMAL)
+                self.log("[CDV] Procesamiento completo. Se puede visualizar el dashboard.")
+        
+        elif analysis_type == "ADV":
+            if progress is not None:
+                self.progress_var_adv.set(progress)
+            
+            if message:
+                self.status_var_adv.set(message)
+                self.log(f"[ADV] {message}")
+                
+            # Actualizar estado de procesamiento
+            if progress == 100:
+                self.adv_processing_complete = True
+                self.view_adv_button.config(state=tk.NORMAL)
+                self.log("[ADV] Procesamiento completo. Se puede visualizar el dashboard.")
     
     def view_results(self, analysis_type):
         """Visualizar resultados en dashboard web"""
