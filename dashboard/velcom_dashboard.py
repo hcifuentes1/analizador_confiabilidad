@@ -6,12 +6,18 @@ from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 import plotly.express as px
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 import webbrowser
 from threading import Timer
 import plotly.graph_objs as go
 
+
+
+
+# Modificación para la función load_data en velcom_dashboard.py
+
 def load_data(data_path):
-    """Cargar datos procesados de Velcom y preparar para visualización 3D"""
+    """Cargar datos procesados de Velcom y fallos CDV"""
     data = {
         'velcom_data': pd.read_csv(os.path.join(data_path, 'velcom_data.csv')),
         'velcom_trains': pd.read_csv(os.path.join(data_path, 'velcom_trains.csv')),
@@ -27,6 +33,33 @@ def load_data(data_path):
     for col in ['first_arrival', 'last_arrival']:
         if col in data['velcom_trains'].columns:
             data['velcom_trains'][col] = pd.to_datetime(data['velcom_trains'][col], errors='coerce')
+    
+    # Cargar datos de fallos CDV
+    try:
+        # Intentar cargar fallos de ocupación
+        fo_path = os.path.join(data_path, 'df_L2_FO_Mensual.csv')
+        if os.path.exists(fo_path):
+            data['fallos_ocupacion'] = pd.read_csv(fo_path)
+            # Convertir fechas
+            if 'Fecha Hora' in data['fallos_ocupacion'].columns:
+                data['fallos_ocupacion']['Fecha Hora'] = pd.to_datetime(data['fallos_ocupacion']['Fecha Hora'])
+            print(f"Cargados {len(data['fallos_ocupacion'])} registros de fallos de ocupación")
+        else:
+            print(f"Archivo de fallos de ocupación no encontrado en: {fo_path}")
+        
+        # Intentar cargar fallos de liberación
+        fl_path = os.path.join(data_path, 'df_L2_FL_Mensual.csv')
+        if os.path.exists(fl_path):
+            data['fallos_liberacion'] = pd.read_csv(fl_path)
+            # Convertir fechas
+            if 'Fecha Hora' in data['fallos_liberacion'].columns:
+                data['fallos_liberacion']['Fecha Hora'] = pd.to_datetime(data['fallos_liberacion']['Fecha Hora'])
+            print(f"Cargados {len(data['fallos_liberacion'])} registros de fallos de liberación")
+        else:
+            print(f"Archivo de fallos de liberación no encontrado en: {fl_path}")
+    
+    except Exception as e:
+        print(f"Error al cargar datos de fallos CDV: {e}")
     
     # 2. Preparar datos para visualización 3D
     
@@ -76,9 +109,26 @@ def load_data(data_path):
         df_3d_processed = df_3d.copy()
         df_3d_processed['speed'] = 5  # Valor por defecto
     
+    # En load_data()
     # 2.7 Crear mapeo numérico de estaciones para visualización 3D
-    all_stations = sorted(df_3d_processed['station'].unique())
-    station_mapping = {station: i for i, station in enumerate(all_stations)}
+    ordered_stations = [
+        'AV', 'ZA', 'DO', 'EI', 'CE', 'CB', 'PT', 'CA', 'AN', 'HE', 'TO', 'PQ', 
+        'RO', 'FR', 'LL', 'SM', 'LV', 'DE', 'CN', 'LO', 'EP', 'LC', 'EB', 'OB', 
+        'CM', 'PI'
+    ]
+    
+    # Crear diccionario de mapeo según el orden específico
+    station_mapping = {station: i for i, station in enumerate(ordered_stations)}
+    
+    # Para estaciones que no están en la lista, añadirlas al final
+    all_stations = df_3d_processed['station'].unique()
+    max_value = len(ordered_stations)
+    for station in all_stations:
+        if station not in station_mapping:
+            station_mapping[station] = max_value
+            max_value += 1
+    
+    # Asignar valores numéricos a las estaciones
     df_3d_processed['station_num'] = df_3d_processed['station'].map(station_mapping)
     
     # 2.8 Llenar valores NaN en datos críticos
@@ -88,8 +138,67 @@ def load_data(data_path):
     # 3. Guardar los datos procesados
     data['velcom_data_3d'] = df_3d_processed
     data['station_mapping'] = station_mapping
+    data['ordered_stations'] = ordered_stations
+    
+    # 4. Procesar datos de fallos CDV para visualización
+    process_failure_data(data)
     
     return data
+    
+def process_failure_data(data):
+    """Procesar datos de fallos CDV para visualización"""
+    # Sólo proceder si existen datos de fallos
+    if 'fallos_ocupacion' not in data and 'fallos_liberacion' not in data:
+        print("No se encontraron datos de fallos CDV")
+        return
+    
+    # Crear un DataFrame combinado de fallos 
+    failures_list = []
+    
+    if 'fallos_ocupacion' in data:
+        fo_df = data['fallos_ocupacion'].copy()
+        fo_df['tipo_fallo'] = 'Falsa Ocupación'
+        failures_list.append(fo_df)
+    
+    if 'fallos_liberacion' in data:
+        fl_df = data['fallos_liberacion'].copy()
+        fl_df['tipo_fallo'] = 'Falsa Liberación'
+        failures_list.append(fl_df)
+    
+    if failures_list:
+        # Combinar datos de fallos
+        combined_failures = pd.concat(failures_list, ignore_index=True)
+        
+        # Extraer estación del nombre del equipo si es posible
+        # Formato típico: Estacion_CDV_XX
+        combined_failures['station'] = combined_failures['Equipo'].str.extract(r'(\w+)_CDV_')
+        
+        # Para equipos sin el formato estándar, intentar otra extracción
+        mask = combined_failures['station'].isna()
+        if mask.any():
+            # Intentar extraer del final del nombre (patrón alternativo)
+            combined_failures.loc[mask, 'station'] = combined_failures.loc[mask, 'Equipo'].str.extract(r'_(\w+)$')
+        
+        # Añadir hora del día para análisis
+        combined_failures['time_hours'] = combined_failures['Fecha Hora'].dt.hour + combined_failures['Fecha Hora'].dt.minute/60
+        
+        # Asignar valores numéricos a las estaciones usando el mismo mapeo
+        if 'station_mapping' in data:
+            station_mapping = data['station_mapping']  # Obtener del diccionario data
+            combined_failures['station_num'] = combined_failures['station'].map(station_mapping)
+            
+            # Para estaciones que no están en el mapeo, asignar un valor por defecto
+            combined_failures['station_num'] = combined_failures['station_num'].fillna(-1)
+            
+            # Verificar mapeo de estaciones en fallos
+            stations_in_failures = combined_failures['station'].unique()
+            stations_not_in_mapping = [s for s in stations_in_failures if s not in station_mapping]
+            if stations_not_in_mapping:
+                print(f"Advertencia: Algunas estaciones en fallos no están en el mapeo: {stations_not_in_mapping}")
+        
+        # Guardar el DataFrame procesado
+        data['combined_failures'] = combined_failures
+        print(f"Procesados {len(combined_failures)} registros de fallos combinados")
 
 def create_dashboard(data_path):
     """Crear aplicación Dash para visualizar datos Velcom"""
@@ -278,7 +387,42 @@ def create_dashboard(data_path):
                                 labelStyle={'display': 'inline-block', 'marginRight': '20px'}
                             )
                         ], style={'marginBottom': '20px', 'backgroundColor': '#f8f9fa', 'padding': '10px', 'borderRadius': '5px'}),
+                        
+                        # Checklist para visualizar fallos CDV (añadido dentro de la pestaña)
+                        html.Div([
+                            html.Label("Visualizar fallos CDV:"),
+                            dcc.Checklist(
+                                id='show-failures-checkbox',
+                                options=[
+                                    {'label': 'Mostrar fallos de ocupación', 'value': 'fo'},
+                                    {'label': 'Mostrar fallos de liberación', 'value': 'fl'}
+                                ],
+                                value=[],  # Inicialmente no seleccionados
+                                labelStyle={'display': 'inline-block', 'marginRight': '20px'}
+                            )
+                        ], style={'marginBottom': '20px', 'backgroundColor': '#f8f9fa', 'padding': '10px', 'borderRadius': '5px'}),
+                        
                         dcc.Graph(id='train-3d-graph', style={'height': '700px'})
+                    ], className="content-box full-width")
+                ], className="tab-content")
+            ]),
+            
+            # Nueva pestaña de correlación tren-fallos
+            dcc.Tab(label='Correlación Trenes-Fallos', children=[
+                html.Div([
+                    html.Div([
+                        html.H3("Densidad de fallos por hora del día"),
+                        dcc.Graph(id='failures-heatmap')
+                    ], className="content-box full-width"),
+                    
+                    html.Div([
+                        html.H3("Distribución de fallos por estación"),
+                        dcc.Graph(id='failures-by-station')
+                    ], className="content-box full-width"),
+                    
+                    html.Div([
+                        html.H3("Relación entre tráfico de trenes y fallos"),
+                        dcc.Graph(id='traffic-failures-correlation')
                     ], className="content-box full-width")
                 ], className="tab-content")
             ])
@@ -325,6 +469,286 @@ def create_dashboard(data_path):
         )
         
         return fig
+    
+    @app.callback(
+        Output('failures-heatmap', 'figure'),
+        [Input('date-range', 'start_date'),
+        Input('date-range', 'end_date'),
+        Input('station-dropdown', 'value')]
+    )
+    def update_failures_heatmap(start_date, end_date, station):
+        """Crear mapa de calor de fallos por hora del día y estación"""
+        if 'combined_failures' not in data or data['combined_failures'].empty:
+            # Crear figura vacía si no hay datos
+            fig = go.Figure()
+            fig.update_layout(
+                title="No hay datos de fallos disponibles",
+                xaxis=dict(title=""),
+                yaxis=dict(title="")
+            )
+            return fig
+        
+        df = data['combined_failures'].copy()
+        
+        # Filtrar por fecha si se proporciona rango
+        if start_date and end_date:
+            start_date = pd.to_datetime(start_date)
+            end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            df = df[(df['Fecha Hora'] >= start_date) & (df['Fecha Hora'] <= end_date)]
+        
+        # Filtrar por estación si está seleccionada
+        if station:
+            df = df[df['station'] == station]
+        
+        # Verificar si hay datos después del filtrado
+        if df.empty:
+            fig = go.Figure()
+            fig.update_layout(
+                title="No hay datos para los filtros seleccionados",
+                xaxis=dict(title=""),
+                yaxis=dict(title="")
+            )
+            return fig
+        
+        # Crear bins por hora del día
+        df['hour_bin'] = df['Fecha Hora'].dt.hour
+        
+        # Agrupar por hora y estación
+        heatmap_data = df.groupby(['hour_bin', 'station', 'tipo_fallo']).size().reset_index(name='count')
+        
+        # Crear tabla pivote para el heatmap - separada por tipo de fallo
+        pivot_fo = heatmap_data[heatmap_data['tipo_fallo'] == 'Falsa Ocupación'].pivot(
+            index='station', columns='hour_bin', values='count'
+        ).fillna(0)
+        
+        pivot_fl = heatmap_data[heatmap_data['tipo_fallo'] == 'Falsa Liberación'].pivot(
+            index='station', columns='hour_bin', values='count'
+        ).fillna(0)
+        
+        # Reordenar las estaciones según el orden específico
+        if 'ordered_stations' in data:
+            ordered_stations = [s for s in data['ordered_stations'] if s in df['station'].unique()]
+            if pivot_fo is not None and not pivot_fo.empty:
+                pivot_fo = pivot_fo.reindex(ordered_stations)
+            if pivot_fl is not None and not pivot_fl.empty:
+                pivot_fl = pivot_fl.reindex(ordered_stations)
+        
+        # Crear dos subplots para los dos tipos de fallos
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=("Fallos de Ocupación por Hora y Estación", 
+                            "Fallos de Liberación por Hora y Estación"),
+            vertical_spacing=0.12
+        )
+        
+        # Añadir mapa de calor para fallos de ocupación
+        if pivot_fo is not None and not pivot_fo.empty:
+            fig.add_trace(
+                go.Heatmap(
+                    z=pivot_fo.values,
+                    x=pivot_fo.columns,
+                    y=pivot_fo.index,
+                    colorscale='Reds',
+                    showscale=True,
+                    colorbar=dict(title="Fallos FO"),
+                    hovertemplate='Estación: %{y}<br>Hora: %{x}<br>Fallos: %{z}'
+                ),
+                row=1, col=1
+            )
+        
+        # Añadir mapa de calor para fallos de liberación
+        if pivot_fl is not None and not pivot_fl.empty:
+            fig.add_trace(
+                go.Heatmap(
+                    z=pivot_fl.values,
+                    x=pivot_fl.columns,
+                    y=pivot_fl.index,
+                    colorscale='Oranges',
+                    showscale=True,
+                    colorbar=dict(title="Fallos FL"),
+                    hovertemplate='Estación: %{y}<br>Hora: %{x}<br>Fallos: %{z}'
+                ),
+                row=2, col=1
+            )
+        
+        # Actualizar diseño
+        fig.update_layout(
+            height=800,
+            title_text="Densidad de fallos CDV por hora y estación",
+            xaxis=dict(title='Hora del día (0-23)'),
+            xaxis2=dict(title='Hora del día (0-23)'),
+            yaxis=dict(title='Estación'),
+            yaxis2=dict(title='Estación')
+        )
+        
+        return fig
+
+    @app.callback(
+        Output('failures-by-station', 'figure'),
+        [Input('date-range', 'start_date'),
+        Input('date-range', 'end_date'),
+        Input('station-dropdown', 'value')]
+    )
+    def update_failures_by_station(start_date, end_date, station):
+        """Crear gráfico de barras de fallos por estación, dividido por tipo"""
+        if 'combined_failures' not in data or data['combined_failures'].empty:
+            # Crear figura vacía si no hay datos
+            fig = go.Figure()
+            fig.update_layout(
+                title="No hay datos de fallos disponibles",
+                xaxis=dict(title=""),
+                yaxis=dict(title="")
+            )
+            return fig
+        
+        df = data['combined_failures'].copy()
+        
+        # Filtrar por fecha si se proporciona rango
+        if start_date and end_date:
+            start_date = pd.to_datetime(start_date)
+            end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            df = df[(df['Fecha Hora'] >= start_date) & (df['Fecha Hora'] <= end_date)]
+        
+        # Filtrar por estación si está seleccionada
+        if station:
+            df = df[df['station'] == station]
+        
+        # Verificar si hay datos después del filtrado
+        if df.empty:
+            fig = go.Figure()
+            fig.update_layout(
+                title="No hay datos para los filtros seleccionados",
+                xaxis=dict(title=""),
+                yaxis=dict(title="")
+            )
+            return fig
+        
+        # Agrupar por estación y tipo de fallo
+        grouped_data = df.groupby(['station', 'tipo_fallo']).size().reset_index(name='count')
+        
+        # Reordenar según el orden específico de estaciones
+        if 'ordered_stations' in data:
+            # Crear diccionario de mapeo para ordenar
+            station_order = {s: i for i, s in enumerate(data['ordered_stations'])}
+            # Aplicar el orden personalizado
+            grouped_data['station_order'] = grouped_data['station'].map(
+                lambda x: station_order.get(x, len(station_order)))
+            grouped_data = grouped_data.sort_values('station_order')
+            grouped_data = grouped_data.drop('station_order', axis=1)
+        
+        # Crear gráfico de barras agrupadas
+        fig = px.bar(
+            grouped_data,
+            x='station',
+            y='count',
+            color='tipo_fallo',
+            barmode='group',
+            title='Distribución de fallos por estación',
+            labels={'station': 'Estación', 'count': 'Número de fallos', 'tipo_fallo': 'Tipo de fallo'},
+            color_discrete_map={'Falsa Ocupación': 'red', 'Falsa Liberación': 'orange'}
+        )
+        
+        fig.update_layout(
+            xaxis=dict(title='Estación'),
+            yaxis=dict(title='Número de fallos'),
+            legend=dict(title='Tipo de fallo'),
+            height=500
+        )
+        
+        return fig
+
+    @app.callback(
+        Output('traffic-failures-correlation', 'figure'),
+        [Input('date-range', 'start_date'),
+        Input('date-range', 'end_date'),
+        Input('station-dropdown', 'value')]
+    )
+    def update_traffic_failures_correlation(start_date, end_date, station):
+        """Crear gráfico que muestre la correlación entre tráfico de trenes y fallos CDV"""
+        # Verificar si tenemos datos de tren y fallos
+        if ('combined_failures' not in data or data['combined_failures'].empty or
+            'velcom_data_3d' not in data or data['velcom_data_3d'].empty):
+            # Crear figura vacía si no hay datos
+            fig = go.Figure()
+            fig.update_layout(
+                title="No hay suficientes datos para mostrar correlación",
+                xaxis=dict(title=""),
+                yaxis=dict(title="")
+            )
+            return fig
+        
+        # Copiar los datos para no modificar los originales
+        train_df = data['velcom_data_3d'].copy()
+        failures_df = data['combined_failures'].copy()
+        
+        # Filtrar por fecha si se proporciona rango
+        if start_date and end_date:
+            start_date = pd.to_datetime(start_date)
+            end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            
+            train_df = train_df[(train_df['arrival_time'] >= start_date) & 
+                            (train_df['arrival_time'] <= end_date)]
+            
+            failures_df = failures_df[(failures_df['Fecha Hora'] >= start_date) & 
+                                    (failures_df['Fecha Hora'] <= end_date)]
+        
+        # Filtrar por estación si está seleccionada
+        if station:
+            train_df = train_df[train_df['station'] == station]
+            failures_df = failures_df[failures_df['station'] == station]
+        
+        # Verificar si hay datos después del filtrado
+        if train_df.empty or failures_df.empty:
+            fig = go.Figure()
+            fig.update_layout(
+                title="No hay datos suficientes para los filtros seleccionados",
+                xaxis=dict(title=""),
+                yaxis=dict(title="")
+            )
+            return fig
+        
+        # Agrupar datos de trenes por hora y estación
+        train_df['hour'] = train_df['arrival_time'].dt.hour
+        train_traffic = train_df.groupby(['station', 'hour']).size().reset_index(name='train_count')
+        
+        # Agrupar datos de fallos por hora y estación
+        failures_df['hour'] = failures_df['Fecha Hora'].dt.hour
+        failure_counts = failures_df.groupby(['station', 'hour', 'tipo_fallo']).size().reset_index(name='failure_count')
+        
+        # Combinar datos de tráfico y fallos
+        merged_data = pd.merge(
+            train_traffic, 
+            failure_counts,
+            on=['station', 'hour'],
+            how='outer'
+        ).fillna(0)
+        
+        # Crear scatter plot para mostrar correlación
+        fig = px.scatter(
+            merged_data,
+            x='train_count',
+            y='failure_count',
+            color='tipo_fallo',
+            hover_data=['station', 'hour'],
+            title='Correlación entre tráfico de trenes y fallos CDV',
+            labels={
+                'train_count': 'Número de trenes', 
+                'failure_count': 'Número de fallos',
+                'tipo_fallo': 'Tipo de fallo'
+            },
+            color_discrete_map={'Falsa Ocupación': 'red', 'Falsa Liberación': 'orange'},
+            trendline="ols"  # Añadir línea de tendencia
+        )
+        
+        fig.update_layout(
+            xaxis=dict(title='Número de trenes por hora'),
+            yaxis=dict(title='Número de fallos'),
+            legend=dict(title='Tipo de fallo'),
+            height=500
+        )
+        
+        return fig
+    
     
     # Callback para actualizar gráfico de llegadas por estación
     @app.callback(
@@ -425,24 +849,32 @@ def create_dashboard(data_path):
         
         return fig
     
-    # Callback para actualizar gráfico 3D de trayectos de trenes
     @app.callback(
         Output('train-3d-graph', 'figure'),
         [Input('train-dropdown', 'value'),
-         Input('material-dropdown', 'value'),
-         Input('station-dropdown', 'value'),
-         Input('z-axis-variable', 'value')]
+        Input('material-dropdown', 'value'),
+        Input('station-dropdown', 'value'),
+        Input('z-axis-variable', 'value'),
+        Input('show-failures-checkbox', 'value'),  # Nuevo input
+        Input('date-range', 'start_date'),         # Incluir filtro de fechas
+        Input('date-range', 'end_date')]
     )
-    def update_train_3d_journey(train_number, material, station, z_variable):
-        df = data['velcom_data'].copy()
+    def update_train_3d_journey(train_number, material, station, z_variable, show_failures, start_date, end_date):
+        df = data['velcom_data_3d'].copy()
         
-        # Aplicar filtros
+        # Aplicar filtros a datos de trenes
         if train_number:
             df = df[df['train_number'] == train_number]
         if material:
             df = df[df['material'] == material]
         if station:
             df = df[df['station'] == station]
+        
+        # Filtrar por fecha si se proporciona rango
+        if start_date and end_date:
+            start_date = pd.to_datetime(start_date)
+            end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)  # Incluir el último día completo
+            df = df[(df['arrival_time'] >= start_date) & (df['arrival_time'] <= end_date)]
         
         # Si no hay datos después de filtrar, devolver figura vacía
         if df.empty:
@@ -462,21 +894,9 @@ def create_dashboard(data_path):
             top_trains = df['train_number'].value_counts().nlargest(5).index.tolist()
             df = df[df['train_number'].isin(top_trains)]
         
-        # Convertir estaciones a valores numéricos para el eje Y
-        all_stations = sorted(df['station'].unique())
-        station_mapping = {station: i for i, station in enumerate(all_stations)}
-        df['station_num'] = df['station'].map(station_mapping)
-        
-        # Calcular tiempo desde el inicio del día para cada evento (en horas)
-        df['time_hours'] = df['arrival_time'].dt.hour + df['arrival_time'].dt.minute/60
-        
-        # Calcular diferencia en tiempo con el registro anterior para el mismo tren
-        df = df.sort_values(['train_number', 'arrival_time'])
-        df['prev_time'] = df.groupby('train_number')['arrival_time'].shift(1)
-        df['time_diff'] = (df['arrival_time'] - df['prev_time']).dt.total_seconds() / 60  # en minutos
-        
-        # Calcular tiempo de permanencia en cada estación
-        df['stay_time'] = (df['departure_time'] - df['arrival_time']).dt.total_seconds() / 60  # en minutos
+        # Usar el orden específico y mapeo establecido en load_data
+        ordered_stations = data['ordered_stations']
+        station_mapping = data['station_mapping']
         
         # Crear gráfico 3D
         fig = go.Figure()
@@ -489,16 +909,6 @@ def create_dashboard(data_path):
             # Rellenar NaN con 0 para el primer registro de cada tren
             train_data['time_diff'] = train_data['time_diff'].fillna(0)
             train_data['stay_time'] = train_data['stay_time'].fillna(0)
-            
-            # Calcular velocidad "relativa"
-            if len(train_data) > 1:
-                max_time = train_data['time_diff'].max()
-                if max_time > 0:
-                    train_data['speed'] = 10 * (1 - train_data['time_diff'] / max_time) + 1
-                else:
-                    train_data['speed'] = 1
-            else:
-                train_data['speed'] = 1
             
             # Seleccionar la variable Z según la selección del usuario
             z_title = ''
@@ -521,7 +931,7 @@ def create_dashboard(data_path):
             # Añadir línea 3D para el trayecto
             fig.add_trace(go.Scatter3d(
                 x=train_data['time_hours'],       # Hora del día
-                y=train_data['station_num'],      # Estación (convertida a número)
+                y=train_data['station_num'],      # Estación (convertida a número según orden específico)
                 z=z_values,                       # Valor Z seleccionado
                 mode='lines+markers',
                 name=f'Tren {train} - {material_id}',
@@ -532,20 +942,105 @@ def create_dashboard(data_path):
                     colorscale='Viridis'
                 ),
                 hovertemplate='<b>Tren:</b> %{text}<br>' +
-                             '<b>Hora:</b> %{x:.2f}<br>' +
-                             '<b>Estación:</b> ' + train_data['station'] + '<br>' +
-                             '<b>Permanencia:</b> ' + train_data['stay_time'].round(1).astype(str) + ' min<br>' +
-                             '<b>' + z_title + ':</b> %{z:.2f}<br>',
+                            '<b>Hora:</b> %{x:.2f}<br>' +
+                            '<b>Estación:</b> ' + train_data['station'] + '<br>' +
+                            '<b>Permanencia:</b> ' + train_data['stay_time'].round(1).astype(str) + ' min<br>' +
+                            '<b>' + z_title + ':</b> %{z:.2f}<br>',
                 text=[f"{train} ({material_id})" for _ in range(len(train_data))]
             ))
         
-        # Etiquetas para el eje Y (estaciones)
-        y_tickvals = list(station_mapping.values())
-        y_ticktext = list(station_mapping.keys())
+        # Añadir visualización de fallos si está seleccionada y si tenemos datos de fallos
+        if show_failures and ('combined_failures' in data) and not data['combined_failures'].empty:
+            failures_df = data['combined_failures'].copy()
+            
+            # Filtrar por fecha si se proporciona rango
+            if start_date and end_date:
+                failures_df = failures_df[(failures_df['Fecha Hora'] >= start_date) & 
+                                        (failures_df['Fecha Hora'] <= end_date)]
+            
+            # Filtrar por estación si está seleccionada
+            if station:
+                failures_df = failures_df[failures_df['station'] == station]
+            
+            # Añadir puntos para fallos de ocupación
+            if 'fo' in show_failures:
+                fo_failures = failures_df[failures_df['tipo_fallo'] == 'Falsa Ocupación']
+                if not fo_failures.empty:
+                    # El valor Z será basado en el mismo eje que los trenes, pero ligeramente elevado
+                    # para que se vean por encima de las rutas
+                    if z_variable == 'speed':
+                        z_values_fo = [11] * len(fo_failures)  # Valor constante por encima del máximo de velocidad
+                    elif z_variable == 'time_diff':
+                        z_values_fo = fo_failures['time_hours'] * 0 + max(df[z_variable].max() * 1.1, 10)
+                    elif z_variable == 'stay_time':
+                        z_values_fo = fo_failures['time_hours'] * 0 + max(df[z_variable].max() * 1.1, 10)
+                    else:  # time_hours - usar el valor real de la hora
+                        z_values_fo = fo_failures['time_hours']
+                    
+                    fig.add_trace(go.Scatter3d(
+                        x=fo_failures['time_hours'],
+                        y=fo_failures['station_num'],
+                        z=z_values_fo,
+                        mode='markers',
+                        name='Fallos de Ocupación',
+                        marker=dict(
+                            size=10,
+                            symbol='circle',
+                            color='red',
+                            opacity=0.7
+                        ),
+                        hovertemplate='<b>Fallo de Ocupación</b><br>' +
+                                    '<b>Hora:</b> %{x:.2f}<br>' +
+                                    '<b>Estación:</b> %{text}<br>' +
+                                    '<b>Equipo:</b> ' + fo_failures['Equipo'] + '<br>' +
+                                    '<b>Fecha:</b> ' + fo_failures['Fecha Hora'].dt.strftime('%d-%m-%Y %H:%M:%S'),
+                        text=fo_failures['station']
+                    ))
+            
+            # Añadir puntos para fallos de liberación
+            if 'fl' in show_failures:
+                fl_failures = failures_df[failures_df['tipo_fallo'] == 'Falsa Liberación']
+                if not fl_failures.empty:
+                    # El valor Z será basado en el mismo eje que los trenes, pero ligeramente elevado
+                    # y diferente a los fallos de ocupación para distinguirlos
+                    if z_variable == 'speed':
+                        z_values_fl = [12] * len(fl_failures)  # Valor constante por encima de FO
+                    elif z_variable == 'time_diff':
+                        z_values_fl = fl_failures['time_hours'] * 0 + max(df[z_variable].max() * 1.2, 12)
+                    elif z_variable == 'stay_time':
+                        z_values_fl = fl_failures['time_hours'] * 0 + max(df[z_variable].max() * 1.2, 12)
+                    else:  # time_hours - usar el valor real de la hora
+                        z_values_fl = fl_failures['time_hours']
+                    
+                    fig.add_trace(go.Scatter3d(
+                        x=fl_failures['time_hours'],
+                        y=fl_failures['station_num'],
+                        z=z_values_fl,
+                        mode='markers',
+                        name='Fallos de Liberación',
+                        marker=dict(
+                            size=10,
+                            symbol='diamond',
+                            color='orange',
+                            opacity=0.7
+                        ),
+                        hovertemplate='<b>Fallo de Liberación</b><br>' +
+                                    '<b>Hora:</b> %{x:.2f}<br>' +
+                                    '<b>Estación:</b> %{text}<br>' +
+                                    '<b>Equipo:</b> ' + fl_failures['Equipo'] + '<br>' +
+                                    '<b>Fecha:</b> ' + fl_failures['Fecha Hora'].dt.strftime('%d-%m-%Y %H:%M:%S'),
+                        text=fl_failures['station']
+                    ))
+        
+        # Etiquetas para el eje Y (estaciones) - Mostrar según el orden específico
+        # Filtrar la lista ordenada para incluir solo las estaciones presentes en los datos
+        visible_stations = [st for st in ordered_stations if st in df['station'].unique()]
+        y_tickvals = [station_mapping[station] for station in visible_stations]
+        y_ticktext = visible_stations
         
         # Personalizar layout
         fig.update_layout(
-            title='Visualización 3D de Trayectos de Trenes',
+            title='Visualización 3D de Trayectos de Trenes y Fallos CDV',
             scene=dict(
                 xaxis_title='Hora del día',
                 yaxis_title='Estación',
@@ -555,13 +1050,23 @@ def create_dashboard(data_path):
                 ),
                 yaxis=dict(
                     tickvals=y_tickvals,
-                    ticktext=y_ticktext
+                    ticktext=y_ticktext,
+                    # Añadir esto para mejorar la legibilidad:
+                    tickfont=dict(size=10),
+                    # Asegúrate que el rango cubra todos los valores posibles:
+                    range=[min(df['station_num'])-0.5, max(df['station_num'])+0.5]
                 ),
                 camera=dict(
                     eye=dict(x=1.5, y=-1.5, z=1.2)
                 )
             ),
-            legend_title='Trenes',
+            legend=dict(
+                title='Trenes y Fallos',
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
             margin=dict(l=0, r=0, t=30, b=0),
             height=700
         )
