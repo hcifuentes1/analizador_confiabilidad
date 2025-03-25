@@ -47,20 +47,48 @@ class LineTab:
             self.create_disabled_widgets()
     
     def create_widgets(self):
-        """Crear los widgets de la interfaz para una línea habilitada"""
-        # Marco principal
-        main_frame = ttk.Frame(self.frame, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        """Crear los widgets de la interfaz para una línea habilitada con scrollbar"""
+        # Crear un canvas con scrollbar para el contenido principal
+        outer_frame = ttk.Frame(self.frame)
+        outer_frame.pack(fill=tk.BOTH, expand=True)
         
+        # Canvas y scrollbar vertical
+        canvas = tk.Canvas(outer_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer_frame, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Configurar empaquetado
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Marco principal para el contenido (dentro del canvas)
+        main_frame = ttk.Frame(canvas, padding="10")
+        canvas_window = canvas.create_window((0, 0), window=main_frame, anchor=tk.NW)
+        
+        # Configurar eventos de redimensionamiento
+        def configure_canvas(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(canvas_window, width=event.width)
+        
+        main_frame.bind("<Configure>", configure_canvas)
+        canvas.bind("<Configure>", lambda event: canvas.itemconfig(canvas_window, width=event.width))
+        
+        # Configurar desplazamiento con la rueda del ratón
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # El resto del código de creación de widgets permanece igual
         # Sección de selección de análisis
         analysis_frame = ttk.LabelFrame(main_frame, text="Tipo de Análisis", padding="10")
         analysis_frame.pack(fill=tk.X, padx=5, pady=5)
         
         # Radio buttons para seleccionar CDV o ADV
         ttk.Radiobutton(analysis_frame, text="Circuitos de Vía (CDV)", variable=self.analysis_type_var, 
-                       value="CDV", command=self.toggle_analysis_type).grid(row=0, column=0, padx=20, pady=5, sticky=tk.W)
+                    value="CDV", command=self.toggle_analysis_type).grid(row=0, column=0, padx=20, pady=5, sticky=tk.W)
         ttk.Radiobutton(analysis_frame, text="Agujas (ADV)", variable=self.analysis_type_var, 
-                       value="ADV", command=self.toggle_analysis_type).grid(row=0, column=1, padx=20, pady=5, sticky=tk.W)
+                    value="ADV", command=self.toggle_analysis_type).grid(row=0, column=1, padx=20, pady=5, sticky=tk.W)
         
         # Sección de selección de tipo de datos (solo para Línea 2)
         if self.title == "Línea 2":
@@ -68,9 +96,9 @@ class LineTab:
             data_type_frame.pack(fill=tk.X, padx=5, pady=5)
             
             ttk.Radiobutton(data_type_frame, text="Datos Sacem", variable=self.data_type_var, 
-                           value="Sacem").grid(row=0, column=0, padx=20, pady=5, sticky=tk.W)
+                        value="Sacem").grid(row=0, column=0, padx=20, pady=5, sticky=tk.W)
             ttk.Radiobutton(data_type_frame, text="Datos SCADA (En desarrollo)", variable=self.data_type_var, 
-                           value="SCADA", state=tk.DISABLED).grid(row=0, column=1, padx=20, pady=5, sticky=tk.W)
+                        value="SCADA", state=tk.DISABLED).grid(row=0, column=1, padx=20, pady=5, sticky=tk.W)
         
         # Sección de selección de carpetas
         folder_frame = ttk.LabelFrame(main_frame, text="Rutas de archivos", padding="10")
@@ -94,14 +122,14 @@ class LineTab:
         ttk.Label(self.cdv_config_frame, text="Factor umbral ocupación (f_oc_1):").grid(row=0, column=0, sticky=tk.W, pady=5)
         ttk.Entry(self.cdv_config_frame, textvariable=self.f_oc_1_var, width=10).grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
         ttk.Label(self.cdv_config_frame, 
-                 text="Valor entre 0 y 1. Menor valor = más sensible en detección de fallos de ocupación").grid(
+                text="Valor entre 0 y 1. Menor valor = más sensible en detección de fallos de ocupación").grid(
             row=0, column=2, sticky=tk.W, padx=10)
         
         # Factor de umbral para liberación
         ttk.Label(self.cdv_config_frame, text="Factor umbral liberación (f_lb_2):").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Entry(self.cdv_config_frame, textvariable=self.f_lb_2_var, width=10).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
         ttk.Label(self.cdv_config_frame, 
-                 text="Valor entre 0 y 1. Menor valor = más sensible en detección de fallos de liberación").grid(
+                text="Valor entre 0 y 1. Menor valor = más sensible en detección de fallos de liberación").grid(
             row=1, column=2, sticky=tk.W, padx=10)
         
         # Después de la sección de configuración CDV, añadir sección para Velcom (solo para Línea 2)
@@ -191,11 +219,12 @@ class LineTab:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=10)
 
-        # Usar grid() para mejor control de posición
+        # Usar grid para mejor control de posición
         ttk.Button(button_frame, text="Analizar CDV", command=lambda: self.start_processing("CDV")).grid(row=0, column=3, padx=5, pady=5)
         ttk.Button(button_frame, text="Analizar ADV", command=lambda: self.start_processing("ADV")).grid(row=0, column=2, padx=5, pady=5)
         ttk.Button(button_frame, text="Analizar Ambos", command=self.start_both_processing).grid(row=0, column=1, padx=5, pady=5)
         ttk.Button(button_frame, text="Limpiar log", command=self.clear_log).grid(row=0, column=0, padx=5, pady=5)
+
     
     def create_disabled_widgets(self):
         """Crear widgets para pestañas deshabilitadas"""

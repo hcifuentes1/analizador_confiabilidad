@@ -25,7 +25,7 @@ class MetroAnalyzerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Metro de Santiago - Analizador SCADA")
-        self.root.geometry("1000x700")
+        self.root.geometry("1024x768")  # Dimensiones más grandes
         self.root.minsize(900, 600)
         
         # Cargar configuración
